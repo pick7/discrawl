@@ -149,8 +149,9 @@ func TestStoreMaintenanceHelpers(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 
-	require.NoError(t, ensureDBFile(dbPath))
-	require.NoError(t, tightenDBFilePerms(dbPath))
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	require.NoError(t, s.RebuildSearchIndexes(ctx))
 	version, err := s.schemaVersion(ctx)
 	require.NoError(t, err)
@@ -1519,6 +1520,7 @@ func TestListMessagesFiltersAndLimit(t *testing.T) {
 
 	require.NoError(t, s.UpsertChannel(ctx, ChannelRecord{ID: "c1", GuildID: "g1", Kind: "text", Name: "maintainers", RawJSON: `{}`}))
 	require.NoError(t, s.UpsertChannel(ctx, ChannelRecord{ID: "c2", GuildID: "g1", Kind: "text", Name: "random", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertGuild(ctx, GuildRecord{ID: "g1", Name: "Guild", RawJSON: `{}`}))
 	require.NoError(t, s.UpsertMember(ctx, MemberRecord{
 		GuildID:     "g1",
 		UserID:      "u1",
@@ -1625,6 +1627,7 @@ func TestListMessagesFiltersAndLimit(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "m4", rows[0].MessageID)
 	require.Equal(t, "fallback-user", rows[0].AuthorName)
+	require.Equal(t, "Guild", rows[0].GuildName)
 	require.True(t, rows[0].Pinned)
 	require.True(t, rows[0].HasAttachments)
 
@@ -1664,6 +1667,49 @@ func TestListMessagesFiltersAndLimit(t *testing.T) {
 	require.Len(t, rows, 2)
 	require.Equal(t, "m2", rows[0].MessageID)
 	require.Equal(t, "m4", rows[1].MessageID)
+}
+
+func TestListMessagesWithThreadContextHydratesReplyRoot(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	require.NoError(t, s.UpsertGuild(ctx, GuildRecord{ID: "g1", Name: "Guild", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertChannel(ctx, ChannelRecord{ID: "c1", GuildID: "g1", Kind: "text", Name: "general", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertMessage(ctx, MessageRecord{
+		ID:                "root",
+		GuildID:           "g1",
+		ChannelID:         "c1",
+		ChannelName:       "general",
+		AuthorID:          "u1",
+		MessageType:       0,
+		CreatedAt:         "2026-03-01T10:00:00Z",
+		Content:           "root message",
+		NormalizedContent: "root message",
+		RawJSON:           `{}`,
+	}))
+	require.NoError(t, s.UpsertMessage(ctx, MessageRecord{
+		ID:                "reply",
+		GuildID:           "g1",
+		ChannelID:         "c1",
+		ChannelName:       "general",
+		AuthorID:          "u2",
+		MessageType:       0,
+		CreatedAt:         "2026-03-02T10:00:00Z",
+		Content:           "reply message",
+		NormalizedContent: "reply message",
+		ReplyToMessageID:  "root",
+		RawJSON:           `{}`,
+	}))
+
+	rows, err := s.ListMessagesWithThreadContext(ctx, MessageListOptions{Last: 1})
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, "reply", rows[0].MessageID)
+	require.Equal(t, "root", rows[1].MessageID)
 }
 
 func TestNormalizeFTSQueryEdgeCases(t *testing.T) {

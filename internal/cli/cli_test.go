@@ -76,6 +76,21 @@ func TestStatusSearchSQLAndListings(t *testing.T) {
 		NormalizedContent: "panic locked database",
 		RawJSON:           `{}`,
 	}))
+	require.NoError(t, s.UpsertGuild(ctx, store.GuildRecord{ID: "g2", Name: "Other Guild", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertChannel(ctx, store.ChannelRecord{ID: "c2", GuildID: "g2", Kind: "text", Name: "random", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertMessage(ctx, store.MessageRecord{
+		ID:                "m-other",
+		GuildID:           "g2",
+		ChannelID:         "c2",
+		ChannelName:       "random",
+		AuthorID:          "u2",
+		AuthorName:        "Outside",
+		MessageType:       0,
+		CreatedAt:         time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano),
+		Content:           "outside default guild",
+		NormalizedContent: "outside default guild",
+		RawJSON:           `{}`,
+	}))
 	require.NoError(t, s.UpsertMessage(ctx, store.MessageRecord{
 		ID:                "m2",
 		GuildID:           "g1",
@@ -137,6 +152,35 @@ func TestStatusSearchSQLAndListings(t *testing.T) {
 		require.NoError(t, Run(ctx, args, &out, &bytes.Buffer{}))
 		require.NotEmpty(t, out.String())
 	}
+
+	before, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	var out bytes.Buffer
+	require.NoError(t, Run(ctx, []string{"--config", cfgPath, "--json", "tui", "--limit", "5"}, &out, &bytes.Buffer{}))
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &rows))
+	require.NotEmpty(t, rows)
+	require.Equal(t, "panic locked database", rows[0]["title"])
+	require.Equal(t, "discord", rows[0]["source"])
+	require.Equal(t, "message", rows[0]["kind"])
+	require.Equal(t, "Guild", rows[0]["scope"])
+	require.Equal(t, "general", rows[0]["container"])
+	require.Equal(t, "https://discord.com/channels/g1/c1/m1", rows[0]["url"])
+	after, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "tui --json should not mutate the database")
+}
+
+func TestTUIHelpReturnsUsage(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	require.NoError(t, Run(context.Background(), []string{"tui", "--help"}, &stdout, &stderr))
+	require.Contains(t, stdout.String(), "Usage of tui:")
+	require.Contains(t, stdout.String(), "-limit")
+	require.Contains(t, stdout.String(), "right-click")
+	require.Contains(t, stdout.String(), "#              jump")
+	require.Empty(t, stderr.String())
 }
 
 func TestWiretapImportsDesktopDirectMessages(t *testing.T) {
@@ -181,6 +225,53 @@ func TestWiretapImportsDesktopDirectMessages(t *testing.T) {
 	out.Reset()
 	require.NoError(t, Run(ctx, []string{"--config", cfgPath, "messages", "--dm", "--channel", "Alice", "--last", "1"}, &out, &bytes.Buffer{}))
 	require.Contains(t, out.String(), "secret DM launch plan")
+}
+
+func TestDiscordTUIRowsIncludePaneMetadata(t *testing.T) {
+	rows := discordTUIRows([]store.MessageRow{{
+		MessageID:       "m1",
+		GuildID:         "@me",
+		GuildName:       "Discord Direct Messages",
+		ChannelID:       "c1",
+		ChannelName:     "Vincent K",
+		AuthorID:        "u1",
+		AuthorName:      "Peter",
+		Content:         "hello from desktop",
+		DisplayContent:  "hello from Vincent",
+		CreatedAt:       time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC),
+		ReplyToMessage:  "m0",
+		HasAttachments:  true,
+		AttachmentNames: "trace.txt",
+		AttachmentText:  "stack trace line one",
+		Pinned:          true,
+	}})
+	require.Len(t, rows, 1)
+	require.Equal(t, "hello from Vincent", rows[0].Title)
+	require.Contains(t, rows[0].Detail, "hello from Vincent")
+	require.Contains(t, rows[0].Detail, "Attachments")
+	require.Contains(t, rows[0].Detail, "stack trace line one")
+	require.Equal(t, "hello from Vincent", rows[0].Text)
+	require.Equal(t, "Direct messages", rows[0].Scope)
+	require.Equal(t, "Vincent K", rows[0].Container)
+	require.Contains(t, rows[0].Tags, "dm")
+	require.Equal(t, "true", rows[0].Fields["attachments"])
+	require.Equal(t, "trace.txt", rows[0].Fields["attachment_names"])
+	require.Equal(t, "true", rows[0].Fields["pinned"])
+	require.Equal(t, "m0", rows[0].Fields["reply_to"])
+	require.Equal(t, "@me", rows[0].Fields["guild_id"])
+
+	rows = discordTUIRows([]store.MessageRow{{
+		MessageID: "m2",
+		GuildID:   "g1",
+		ChannelID: "c2",
+		AuthorID:  "439223656200273932",
+		Content:   "desktop-only author",
+		CreatedAt: time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC),
+		Source:    "discord_desktop",
+	}})
+	require.Equal(t, "user:439223...3932", rows[0].Author)
+	require.Equal(t, "DM c2", discordContainerLabel(store.MessageRow{GuildID: "@me", ChannelID: "c2"}))
+	require.Contains(t, rows[0].Tags, "discord_desktop")
 }
 
 func TestParseMessageWindow(t *testing.T) {

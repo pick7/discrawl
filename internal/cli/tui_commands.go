@@ -1,0 +1,239 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"strings"
+
+	"github.com/vincentkoc/crawlkit/tui"
+
+	"github.com/openclaw/discrawl/internal/store"
+)
+
+func (r *runtime) runTUI(args []string) error {
+	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
+	fs.SetOutput(r.stderr)
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(fs.Output(), "Usage of tui:")
+		fs.PrintDefaults()
+		_, _ = fmt.Fprintln(fs.Output())
+		_, _ = fmt.Fprintln(fs.Output(), tui.ControlsHelp())
+	}
+	if hasHelpArg(args) {
+		fs.SetOutput(r.stdout)
+	}
+	channel := fs.String("channel", "", "channel id")
+	author := fs.String("author", "", "author/user id")
+	limit := fs.Int("limit", 200, "row limit")
+	includeEmpty := fs.Bool("include-empty", false, "include empty messages")
+	dm := fs.Bool("dm", false, "browse direct messages")
+	guildsFlag := fs.String("guilds", "", "comma-separated guild ids")
+	guildFlag := fs.String("guild", "", "guild id")
+	jsonOut := fs.Bool("json", false, "write browser rows as JSON")
+	if len(args) == 1 && args[0] == "help" {
+		fs.Usage()
+		return nil
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return usageErr(err)
+	}
+	if *jsonOut {
+		r.json = true
+	}
+	if fs.NArg() != 0 {
+		return usageErr(errors.New("tui takes flags only"))
+	}
+	if *limit <= 0 {
+		return usageErr(errors.New("tui --limit must be positive"))
+	}
+	guildIDs, err := r.resolveTUIGuilds(*dm, *guildFlag, *guildsFlag)
+	if err != nil {
+		return usageErr(err)
+	}
+	if r.store == nil {
+		return tui.Browse(r.ctx, tui.BrowseOptions{
+			AppName:        "discrawl",
+			Title:          "discrawl archive",
+			EmptyMessage:   "discrawl has no local messages yet",
+			JSON:           r.json,
+			Layout:         tui.LayoutChat,
+			SourceKind:     r.archiveSourceKind(),
+			SourceLocation: r.archiveSourceLocation(),
+			Stdout:         r.stdout,
+		})
+	}
+	loadRows := func() ([]tui.Row, error) {
+		rows, err := r.store.ListMessagesWithThreadContext(r.ctx, store.MessageListOptions{
+			GuildIDs:     guildIDs,
+			Channel:      *channel,
+			Author:       *author,
+			Last:         *limit,
+			IncludeEmpty: *includeEmpty,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return discordTUIRows(rows), nil
+	}
+	archiveRows, err := loadRows()
+	if err != nil {
+		return err
+	}
+	return tui.Browse(r.ctx, tui.BrowseOptions{
+		AppName:        "discrawl",
+		Title:          "discrawl archive",
+		EmptyMessage:   "discrawl has no local messages yet",
+		Rows:           archiveRows,
+		Refresh:        func(context.Context) ([]tui.Row, error) { return loadRows() },
+		JSON:           r.json,
+		Layout:         tui.LayoutChat,
+		SourceKind:     r.archiveSourceKind(),
+		SourceLocation: r.archiveSourceLocation(),
+		Stdout:         r.stdout,
+	})
+}
+
+func (r *runtime) resolveTUIGuilds(dm bool, guild, guilds string) ([]string, error) {
+	guildIDs, err := directMessageGuildScope(dm, guild, guilds)
+	if err != nil || dm || len(guildIDs) > 0 {
+		return guildIDs, err
+	}
+	if defaultGuild := r.cfg.EffectiveDefaultGuildID(); defaultGuild != "" {
+		return []string{defaultGuild}, nil
+	}
+	return nil, nil
+}
+
+func (r *runtime) archiveSourceKind() string {
+	if strings.TrimSpace(r.cfg.Share.Remote) != "" {
+		return tui.SourceRemote
+	}
+	return tui.SourceLocal
+}
+
+func (r *runtime) archiveSourceLocation() string {
+	if strings.TrimSpace(r.cfg.Share.Remote) != "" {
+		return r.cfg.Share.Remote
+	}
+	return r.cfg.DBPath
+}
+
+func discordTUIRows(rows []store.MessageRow) []tui.Row {
+	items := make([]tui.Row, 0, len(rows))
+	for _, row := range rows {
+		content := discordDisplayContent(row)
+		title := strings.TrimSpace(content)
+		detail := discordDetailContent(row, content)
+		if title == "" {
+			title = firstNonEmpty(strings.TrimSpace(row.AttachmentText), row.MessageID)
+		}
+		tags := []string{row.GuildID, row.ChannelID}
+		if row.GuildID == "@me" {
+			tags = append(tags, "dm")
+		}
+		if row.Source != "" {
+			tags = append(tags, row.Source)
+		}
+		items = append(items, tui.Row{
+			Source:    "discord",
+			Kind:      "message",
+			ID:        row.MessageID,
+			ParentID:  row.ReplyToMessage,
+			Scope:     discordScopeLabel(row),
+			Container: discordContainerLabel(row),
+			Author:    discordAuthorLabel(row),
+			Title:     title,
+			Text:      content,
+			Detail:    detail,
+			URL:       discordMessageURL(row),
+			CreatedAt: formatTime(row.CreatedAt),
+			Tags:      tags,
+			Fields: map[string]string{
+				"attachment_names": row.AttachmentNames,
+				"attachments":      boolString(row.HasAttachments),
+				"author_id":        row.AuthorID,
+				"channel_id":       row.ChannelID,
+				"guild_id":         row.GuildID,
+				"pinned":           boolString(row.Pinned),
+				"reply_to":         row.ReplyToMessage,
+				"source":           row.Source,
+			},
+		})
+	}
+	return items
+}
+
+func discordDetailContent(row store.MessageRow, content string) string {
+	var parts []string
+	if strings.TrimSpace(content) != "" {
+		parts = append(parts, strings.TrimSpace(content))
+	}
+	if strings.TrimSpace(row.AttachmentText) != "" {
+		parts = append(parts, "Attachments\n"+strings.TrimSpace(row.AttachmentText))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func discordDisplayContent(row store.MessageRow) string {
+	if content := strings.TrimSpace(row.DisplayContent); content != "" {
+		return content
+	}
+	return row.Content
+}
+
+func discordMessageURL(row store.MessageRow) string {
+	guildID := strings.TrimSpace(row.GuildID)
+	channelID := strings.TrimSpace(row.ChannelID)
+	messageID := strings.TrimSpace(row.MessageID)
+	if guildID == "" || channelID == "" || messageID == "" {
+		return ""
+	}
+	return "https://discord.com/channels/" + guildID + "/" + channelID + "/" + messageID
+}
+
+func discordScopeLabel(row store.MessageRow) string {
+	if row.GuildID == "@me" {
+		return "Direct messages"
+	}
+	return firstNonEmpty(row.GuildName, row.GuildID)
+}
+
+func discordContainerLabel(row store.MessageRow) string {
+	if row.GuildID == "@me" {
+		return firstNonEmpty(row.ChannelName, "DM "+compactDiscordID(row.ChannelID))
+	}
+	return firstNonEmpty(row.ChannelName, row.ChannelID)
+}
+
+func discordAuthorLabel(row store.MessageRow) string {
+	if name := strings.TrimSpace(row.AuthorName); name != "" {
+		return name
+	}
+	if id := strings.TrimSpace(row.AuthorID); id != "" {
+		return "user:" + compactDiscordID(id)
+	}
+	return ""
+}
+
+func compactDiscordID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 10 {
+		return id
+	}
+	return id[:6] + "..." + id[len(id)-4:]
+}
+
+func boolString(value bool) string {
+	if value {
+		return "true"
+	}
+	return ""
+}

@@ -5,13 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"time"
 
-	_ "modernc.org/sqlite"
+	crawlstore "github.com/vincentkoc/crawlkit/store"
 )
 
 const (
@@ -114,66 +111,33 @@ type ChannelRow struct {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir db dir: %w", err)
-	}
-	if err := ensureDBFile(path); err != nil {
-		return nil, err
-	}
-	dsn := fmt.Sprintf(
-		"file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)&_pragma=busy_timeout(5000)",
-		path,
-	)
-	db, err := sql.Open("sqlite", dsn)
+	base, err := crawlstore.Open(ctx, crawlstore.Options{Path: path})
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
-	}
-	// SQLite is single-writer; keep one shared connection so concurrent callers queue
-	// instead of contending on separate writer connections.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("ping sqlite: %w", err)
-	}
-	if err := tightenDBFilePerms(path); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
+	db := base.DB()
 	store := &Store{db: db, path: path}
 	if err := store.migrate(ctx); err != nil {
-		_ = db.Close()
+		_ = base.Close()
 		return nil, err
 	}
 	return store, nil
 }
 
-func ensureDBFile(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat db file: %w", err)
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	base, err := crawlstore.OpenReadOnly(ctx, path)
+	if err != nil {
+		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil && !os.IsExist(err) {
-		return fmt.Errorf("create db file: %w", err)
+	store := &Store{db: base.DB(), path: path}
+	if version, err := store.schemaVersion(ctx); err != nil {
+		_ = base.Close()
+		return nil, err
+	} else if version != storeSchemaVersion {
+		_ = base.Close()
+		return nil, fmt.Errorf("database schema version mismatch: got %d want %d", version, storeSchemaVersion)
 	}
-	if file != nil {
-		if closeErr := file.Close(); closeErr != nil {
-			return fmt.Errorf("close db file: %w", closeErr)
-		}
-	}
-	return nil
-}
-
-func tightenDBFilePerms(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("chmod db file: %w", err)
-	}
-	return nil
+	return store, nil
 }
 
 func (s *Store) Close() error {

@@ -100,11 +100,16 @@ Usage:
   discrawl [global flags] <command> [args]
 
 Commands:
+  metadata
+  version
   init
   sync
   tail
+  tap
+  cache-import
   wiretap
   search
+  tui
   messages
   digest
   analytics

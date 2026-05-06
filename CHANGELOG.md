@@ -26,10 +26,24 @@
 - Refreshed dependency and CI tooling pins, including GoReleaser, `go-toml`, golangci-lint, and gosec.
 - Tightened CI compatibility with the latest linters and made signal-cancellation and sync fixture tests deterministic under the race detector.
 
+### Fixes
+
+- Label direct-message TUI panes as direct messages instead of raw `@me` guild rows, keeping DM channel/person context readable.
+- Inherit shared crawlkit TUI improvements for newest-first startup, count-header sorting, selected-message-first chat detail panes, and gitcrawl-style metadata labels.
+- Surface Discord attachment filenames and extracted text in TUI detail panes instead of only showing `attachments=true`.
+
 ## 0.6.3 - 2026-05-01
+
+### Changes
+
+- Add crawlkit control metadata/status surfaces with `metadata --json`, `status --json`, and `doctor --json`.
+- Add `tap` and `cache-import` as public desktop-cache import names while keeping `wiretap` as a documented legacy alias.
+- Add `discrawl tui`, a terminal archive browser for stored guild messages and local `@me` wiretap DMs using the shared `crawlkit/tui` package.
+- Render TUI rows with compact panes and expose pinned, attachment, reply, channel, and author metadata in the detail pane.
 
 ### Fixes
 
+- Keep status and TUI reads safe for fresh or missing local databases without triggering git-share auto-update.
 - Added OS keyring fallback for Discord bot-token resolution, keeping env as the first source and documenting the default keyring item. (#17)
 - Clarified and locked down FTS query normalization so operator-like search terms such as `AND`, `OR`, `NOT`, `NEAR`, and `*` stay parameterized and quoted before SQLite `MATCH`. Thanks @mvanhorn.
 
