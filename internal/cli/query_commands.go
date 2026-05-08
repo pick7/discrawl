@@ -25,7 +25,7 @@ func (r *runtime) runSearch(args []string) error {
 	dm := fs.Bool("dm", false, "")
 	guildsFlag := fs.String("guilds", "", "")
 	guildFlag := fs.String("guild", "", "")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(permuteSearchFlags(args)); err != nil {
 		return usageErr(err)
 	}
 	if fs.NArg() != 1 {
@@ -65,6 +65,51 @@ func (r *runtime) runSearch(args []string) error {
 	default:
 		return usageErr(fmt.Errorf("unsupported search mode %q", *mode))
 	}
+}
+
+func permuteSearchFlags(args []string) []string {
+	valueFlags := map[string]struct{}{
+		"--mode":    {},
+		"--channel": {},
+		"--author":  {},
+		"--limit":   {},
+		"--guilds":  {},
+		"--guild":   {},
+	}
+	boolFlags := map[string]struct{}{
+		"--include-empty": {},
+		"--dm":            {},
+	}
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if name, _, ok := strings.Cut(arg, "="); ok {
+			if _, known := valueFlags[name]; known {
+				flags = append(flags, arg)
+				continue
+			}
+			if _, known := boolFlags[name]; known {
+				flags = append(flags, arg)
+				continue
+			}
+		}
+		if _, known := boolFlags[arg]; known {
+			flags = append(flags, arg)
+			continue
+		}
+		if _, known := valueFlags[arg]; known && i+1 < len(args) {
+			flags = append(flags, arg, args[i+1])
+			i++
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	return append(flags, positionals...)
 }
 
 func (r *runtime) searchMessagesSemantic(opts store.SearchOptions) ([]store.SearchResult, error) {

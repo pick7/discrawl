@@ -325,6 +325,7 @@ func TestStatusSearchSQLAndListings(t *testing.T) {
 	tests := [][]string{
 		{"--config", cfgPath, "status"},
 		{"--config", cfgPath, "search", "panic"},
+		{"--config", cfgPath, "search", "panic", "--limit", "1"},
 		{"--config", cfgPath, "search", "stack"},
 		{"--config", cfgPath, "search", "--include-empty", "Peter"},
 		{"--config", cfgPath, "messages", "--channel", "general", "--days", "7", "--all"},
