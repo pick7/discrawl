@@ -389,6 +389,99 @@ func TestStoreReadWriteAndSearch(t *testing.T) {
 	require.Equal(t, "Peter", messageRows[0].AuthorName)
 }
 
+func TestListMessagesWithThreadContextAndMentionLabels(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	base := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, s.UpsertGuild(ctx, GuildRecord{ID: "g1", Name: "Guild", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertChannel(ctx, ChannelRecord{ID: "c1", GuildID: "g1", Kind: "text", Name: "general", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertChannel(ctx, ChannelRecord{ID: "c2", GuildID: "g2", Kind: "text", Name: "other", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertMember(ctx, MemberRecord{
+		GuildID:     "g1",
+		UserID:      "u1",
+		Username:    "alice",
+		DisplayName: "Alice",
+		RoleIDsJSON: `[]`,
+		RawJSON:     `{}`,
+	}))
+	require.NoError(t, s.UpsertMember(ctx, MemberRecord{
+		GuildID:     "g2",
+		UserID:      "u1",
+		Username:    "other-alice",
+		DisplayName: "Other Alice",
+		RoleIDsJSON: `[]`,
+		RawJSON:     `{}`,
+	}))
+	require.NoError(t, s.UpsertMessages(ctx, []MessageMutation{
+		{
+			Record: MessageRecord{
+				ID:                "root",
+				GuildID:           "g1",
+				ChannelID:         "c1",
+				ChannelName:       "general",
+				AuthorID:          "u1",
+				AuthorName:        "Alice",
+				CreatedAt:         base.Format(time.RFC3339Nano),
+				Content:           "root mentions <@u1> and <#c1>",
+				NormalizedContent: "root mentions <@u1> and <#c1>",
+				RawJSON:           `{}`,
+			},
+			Mentions: []MentionEventRecord{{
+				MessageID:  "root",
+				GuildID:    "g1",
+				ChannelID:  "c1",
+				AuthorID:   "u1",
+				TargetType: "role",
+				TargetID:   "r1",
+				TargetName: "Maintainers",
+				EventAt:    base.Format(time.RFC3339Nano),
+			}},
+		},
+		{
+			Record: MessageRecord{
+				ID:                "reply",
+				GuildID:           "g1",
+				ChannelID:         "c1",
+				ChannelName:       "general",
+				AuthorID:          "u1",
+				AuthorName:        "Alice",
+				CreatedAt:         base.Add(time.Minute).Format(time.RFC3339Nano),
+				Content:           "reply to root <@&r1>",
+				NormalizedContent: "reply to root <@&r1>",
+				ReplyToMessageID:  "root",
+				RawJSON:           `{}`,
+			},
+			Mentions: []MentionEventRecord{{
+				MessageID:  "reply",
+				GuildID:    "g1",
+				ChannelID:  "c1",
+				AuthorID:   "u1",
+				TargetType: "role",
+				TargetID:   "r1",
+				TargetName: "Maintainers",
+				EventAt:    base.Add(time.Minute).Format(time.RFC3339Nano),
+			}},
+		},
+	}))
+
+	rows, err := s.ListMessagesWithThreadContext(ctx, MessageListOptions{Channel: "general", Since: base.Add(30 * time.Second), Limit: 1})
+	require.NoError(t, err)
+	require.Equal(t, []string{"reply", "root"}, messageRowIDs(rows))
+	require.Equal(t, "reply to root @Maintainers", rows[0].DisplayContent)
+	require.Equal(t, "root mentions @Alice and #general", rows[1].DisplayContent)
+
+	merged := mergeMessageRows(rows[:1], []MessageRow{rows[0], {MessageID: "other", GuildID: "g1", ChannelID: "c1"}})
+	require.Equal(t, []string{"reply", "other"}, messageRowIDs(merged))
+	require.Equal(t, "@fallback", replaceDiscordMention("<@missing>", "user", "missing", "fallback"))
+	require.Equal(t, "#chan", replaceDiscordMention("<#c1>", "channel", "c1", "chan"))
+	require.Equal(t, "<@u2>", replaceDiscordMention("<@u2>", "user", "", "blank"))
+}
+
 func TestSearchMessagesPrefersRecentMessageIDs(t *testing.T) {
 	t.Parallel()
 
@@ -843,6 +936,14 @@ func searchResultIDs(results []SearchResult) []string {
 	return ids
 }
 
+func messageRowIDs(rows []MessageRow) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.MessageID)
+	}
+	return ids
+}
+
 func TestCheckMessageFTSProbe(t *testing.T) {
 	t.Parallel()
 
@@ -935,6 +1036,33 @@ func TestOpenSetsSchemaVersion(t *testing.T) {
 	var version int
 	require.NoError(t, s.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version))
 	require.Equal(t, storeSchemaVersion, version)
+}
+
+func TestOpenReadOnlySchemaChecks(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "discrawl.db")
+	s, err := Open(ctx, dbPath)
+	require.NoError(t, err)
+	require.NoError(t, s.UpsertGuild(ctx, GuildRecord{ID: "g1", Name: "Guild", RawJSON: `{}`}))
+	require.NoError(t, s.Close())
+
+	ro, err := OpenReadOnly(ctx, dbPath)
+	require.NoError(t, err)
+	status, err := ro.Status(ctx, dbPath, "")
+	require.NoError(t, err)
+	require.Equal(t, 1, status.GuildCount)
+	require.NoError(t, ro.Close())
+
+	future, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+	_, err = future.ExecContext(ctx, `pragma user_version = 999`)
+	require.NoError(t, err)
+	require.NoError(t, future.Close())
+
+	_, err = OpenReadOnly(ctx, dbPath)
+	require.ErrorContains(t, err, "database schema version mismatch")
 }
 
 func TestOpenFailsOnFutureSchemaVersion(t *testing.T) {

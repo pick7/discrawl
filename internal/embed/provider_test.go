@@ -304,6 +304,74 @@ func TestProviderOptionsAndProbeDecisions(t *testing.T) {
 	require.False(t, shouldProbe(providerSettings{Name: ProviderOpenAICompatible, BaseURL: "https://api.example.com/v1"}))
 }
 
+func TestProviderValidationEdges(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveProviderConfig(config.EmbeddingsConfig{
+		Provider:       ProviderOllama,
+		RequestTimeout: "not-a-duration",
+	}, true)
+	require.ErrorContains(t, err, "parse embeddings request_timeout")
+
+	_, err = resolveProviderConfig(config.EmbeddingsConfig{
+		Provider:       ProviderOllama,
+		RequestTimeout: "0s",
+	}, true)
+	require.ErrorContains(t, err, "must be positive")
+
+	_, err = resolveProviderConfig(config.EmbeddingsConfig{
+		Provider: ProviderOllama,
+		BaseURL:  "://bad",
+	}, true)
+	require.ErrorContains(t, err, "invalid embeddings base_url")
+
+	key, err := resolveAPIKey(ProviderOpenAICompatible, "MISSING_EMBED_KEY", false)
+	require.NoError(t, err)
+	require.Empty(t, key)
+
+	_, err = newProvider(providerSettings{Name: "bogus"})
+	require.ErrorContains(t, err, "unsupported embedding provider")
+
+	require.Equal(t, []string{"abc"}, trimInputs([]string{"abc"}, 0))
+	_, err = inferDimensions([][]float32{{}})
+	require.ErrorContains(t, err, "empty vector")
+}
+
+func TestOllamaProviderResponseEdges(t *testing.T) {
+	t.Parallel()
+
+	countServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/embed", r.URL.Path)
+		_, _ = w.Write([]byte(`{"embeddings":[]}`))
+	}))
+	defer countServer.Close()
+
+	provider := newOllamaProvider(providerSettings{
+		HTTPClient:    countServer.Client(),
+		BaseURL:       countServer.URL,
+		Model:         "fallback-model",
+		MaxInputChars: 10,
+	})
+	_, err := provider.Embed(context.Background(), []string{"one"})
+	require.ErrorContains(t, err, "returned 0 vectors for 1 inputs")
+
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/embed", r.URL.Path)
+		_, _ = w.Write([]byte(`{"embeddings":[[1,2]]}`))
+	}))
+	defer modelServer.Close()
+
+	provider = newOllamaProvider(providerSettings{
+		HTTPClient:    modelServer.Client(),
+		BaseURL:       modelServer.URL,
+		Model:         "fallback-model",
+		MaxInputChars: 10,
+	})
+	batch, err := provider.Embed(context.Background(), []string{"one"})
+	require.NoError(t, err)
+	require.Equal(t, "fallback-model", batch.Model)
+}
+
 func TestCheckProviderSkipsRemoteCompatibleProbe(t *testing.T) {
 	t.Parallel()
 

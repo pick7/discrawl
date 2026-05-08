@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +22,8 @@ import (
 
 	"github.com/openclaw/discrawl/internal/config"
 	discordclient "github.com/openclaw/discrawl/internal/discord"
+	"github.com/openclaw/discrawl/internal/discorddesktop"
+	"github.com/openclaw/discrawl/internal/report"
 	"github.com/openclaw/discrawl/internal/share"
 	"github.com/openclaw/discrawl/internal/store"
 	"github.com/openclaw/discrawl/internal/syncer"
@@ -38,6 +42,192 @@ func TestHelpAndVersion(t *testing.T) {
 
 	err := Run(context.Background(), []string{"bogus"}, &out, &bytes.Buffer{})
 	require.Equal(t, 2, ExitCode(err))
+	require.Equal(t, 1, ExitCode(context.Canceled))
+	require.Equal(t, 7, ExitCode(&cliError{code: 7, err: errors.New("custom")}))
+}
+
+func TestCommandValidationEdges(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "discrawl.db")
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	cfg.Discord.TokenSource = "none"
+	require.NoError(t, config.Write(cfgPath, cfg))
+	s, err := store.Open(ctx, dbPath)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	cases := [][]string{
+		{"--config", cfgPath, "--bogus"},
+		{"--config", cfgPath, "search"},
+		{"--config", cfgPath, "search", "--mode", "bogus", "term"},
+		{"--config", cfgPath, "messages"},
+		{"--config", cfgPath, "messages", "--hours", "-1", "--channel", "general"},
+		{"--config", cfgPath, "messages", "--hours", "1", "--days", "1", "--channel", "general"},
+		{"--config", cfgPath, "messages", "--all", "--last", "1", "--channel", "general"},
+		{"--config", cfgPath, "messages", "--dm", "--sync", "--channel", "alice"},
+		{"--config", cfgPath, "dms", "--hours", "-1"},
+		{"--config", cfgPath, "dms", "--limit", "1", "--last", "1", "--with", "alice"},
+		{"--config", cfgPath, "mentions"},
+		{"--config", cfgPath, "mentions", "--days", "-1", "--target", "u1"},
+		{"--config", cfgPath, "mentions", "--type", "channel", "--target", "u1"},
+		{"--config", cfgPath, "digest", "--since", "-1d"},
+		{"--config", cfgPath, "analytics", "wat"},
+		{"--config", cfgPath, "analytics", "quiet", "extra"},
+		{"--config", cfgPath, "analytics", "trends", "--weeks", "-1"},
+		{"--config", cfgPath, "channels"},
+		{"--config", cfgPath, "channels", "wat"},
+		{"--config", cfgPath, "channels", "show"},
+		{"--config", cfgPath, "status", "extra"},
+		{"--config", cfgPath, "report", "extra"},
+		{"--config", cfgPath, "wiretap", "extra"},
+		{"--config", cfgPath, "wiretap", "--max-file-bytes", "0"},
+		{"--config", cfgPath, "sync", "--source", "bogus"},
+		{"--config", cfgPath, "sync", "--since", "not-time"},
+		{"--config", cfgPath, "sync", "--no-update", "--update", "force"},
+		{"--config", cfgPath, "publish", "--remote", ""},
+		{"--config", cfgPath, "subscribe"},
+		{"--config", cfgPath, "update", "extra"},
+		{"--config", cfgPath, "sql", "--confirm", "select 1"},
+		{"--config", cfgPath, "sql", "--unsafe", "select 1"},
+		{"--config", cfgPath, "members"},
+		{"--config", cfgPath, "members", "wat"},
+	}
+	for _, args := range cases {
+		var stdout, stderr bytes.Buffer
+		err := Run(ctx, args, &stdout, &stderr)
+		require.Error(t, err, args)
+	}
+}
+
+func TestOutputBranches(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	values := []any{
+		syncRunStats{
+			Source:  "both",
+			Discord: &syncer.SyncStats{Guilds: 1, Channels: 2, Threads: 3, Members: 4, Messages: 5},
+			Wiretap: &discorddesktop.Stats{
+				Path:                  "/tmp/discord",
+				FilesVisited:          1,
+				FilesScanned:          2,
+				FilesSkipped:          3,
+				FilesUnchanged:        4,
+				CacheFilesFastSkipped: 5,
+				JSONObjects:           6,
+				Guilds:                7,
+				Channels:              8,
+				Messages:              9,
+				DMMessages:            10,
+				DMChannels:            11,
+				GuildMessages:         12,
+				SkippedMessages:       13,
+				SkippedChannels:       14,
+				Checkpoints:           15,
+				FullCache:             true,
+				DryRun:                true,
+			},
+		},
+		syncer.SyncStats{Guilds: 1, Channels: 2, Threads: 3, Members: 4, Messages: 5},
+		discorddesktop.Stats{Path: "/tmp/discord", FilesVisited: 1, FullCache: true, DryRun: true},
+		store.EmbeddingDrainStats{
+			Processed:        3,
+			Succeeded:        2,
+			Failed:           1,
+			Requeued:         4,
+			RateLimited:      true,
+			RemainingBacklog: 5,
+			Provider:         "openai",
+			Model:            "model",
+			InputVersion:     "v1",
+		},
+		[]store.DirectMessageConversationRow{{
+			ChannelID:      "c1",
+			Name:           "Alice",
+			MessageCount:   2,
+			AuthorCount:    1,
+			FirstMessageAt: now.Add(-time.Hour),
+			LastMessageAt:  now,
+		}},
+		store.MemberProfile{
+			Member: store.MemberRow{
+				GuildID:     "g1",
+				UserID:      "u1",
+				Username:    "peter",
+				DisplayName: "Peter",
+				JoinedAt:    now,
+				XHandle:     "steipete",
+				GitHubLogin: "steipete",
+				Website:     "https://steipete.me",
+				Pronouns:    "he/him",
+				Location:    "Vienna",
+				Bio:         "Maintainer",
+				URLs:        []string{"https://example.com"},
+			},
+			MessageCount:   1,
+			FirstMessageAt: now.Add(-time.Hour),
+			LastMessageAt:  now,
+			RecentMessages: []store.MessageRow{{ChannelName: "general", CreatedAt: now, Content: "hello"}},
+		},
+		report.Digest{
+			Since:       now.Add(-24 * time.Hour),
+			Until:       now,
+			WindowLabel: "1d",
+			Channels: []report.ChannelDigest{{
+				ChannelID:     "c1",
+				ChannelName:   "general",
+				Kind:          "text",
+				GuildID:       "g1",
+				Messages:      3,
+				Replies:       1,
+				ActiveAuthors: 2,
+				TopPosters:    []report.RankedCount{{Name: "Peter", Count: 2}},
+				TopMentions:   []report.RankedCount{{Count: 1}},
+			}},
+			Totals: report.DigestTotals{Messages: 3, Replies: 1, Channels: 1, ActiveAuthors: 2},
+		},
+		report.Quiet{
+			Since: now.Add(-24 * time.Hour),
+			Until: now,
+			Channels: []report.QuietChannel{{
+				ChannelID:   "c1",
+				ChannelName: "general",
+				Kind:        "text",
+				LastMessage: "",
+				DaysSilent:  -1,
+			}},
+			Totals: report.QuietTotals{Channels: 1},
+		},
+		report.Trends{
+			Since: now.AddDate(0, 0, -14),
+			Until: now,
+			Weeks: 2,
+			Rows: []report.TrendsRow{{
+				ChannelID:   "c1",
+				ChannelName: "general",
+				Kind:        "text",
+				GuildID:     "g1",
+				Weekly: []report.WeeklyCount{
+					{WeekStart: now.AddDate(0, 0, -14), Messages: 1},
+					{WeekStart: now.AddDate(0, 0, -7), Messages: 2},
+				},
+			}},
+		},
+		map[string]any{"b": 2, "a": 1},
+	}
+	for _, value := range values {
+		var out bytes.Buffer
+		require.NoError(t, printHuman(&out, value))
+		require.NotEmpty(t, out.String())
+	}
+
+	var plain bytes.Buffer
+	require.NoError(t, printPlain(&plain, report.Quiet{Channels: []report.QuietChannel{{ChannelID: "c1", ChannelName: "general", Kind: "text", GuildID: "g1", LastMessage: "now", DaysSilent: 0}}}))
+	require.NoError(t, printPlain(&plain, report.Trends{Rows: []report.TrendsRow{{GuildID: "g1", ChannelID: "c1", ChannelName: "general", Kind: "text", Weekly: []report.WeeklyCount{{WeekStart: now, Messages: 2}}}}}))
+	require.Error(t, printPlain(io.Discard, struct{}{}))
+	require.Error(t, printHuman(io.Discard, struct{}{}))
+	require.Equal(t, "this is a profile field with a very l...", trimForTable("this is a profile field with a very long text value"))
 }
 
 func TestStatusSearchSQLAndListings(t *testing.T) {
@@ -1767,7 +1957,49 @@ func TestRuntimeHelpersAndSubcommands(t *testing.T) {
 	s, err := store.Open(ctx, dbPath)
 	require.NoError(t, err)
 	require.NoError(t, s.UpsertChannel(ctx, store.ChannelRecord{ID: "c1", GuildID: "g1", Kind: "text", Name: "general", RawJSON: `{}`}))
+	require.NoError(t, s.UpsertChannel(ctx, store.ChannelRecord{ID: "dm1", GuildID: store.DirectMessageGuildID, Kind: "dm", Name: "Alice", RawJSON: `{}`}))
 	require.NoError(t, s.UpsertMember(ctx, store.MemberRecord{GuildID: "g1", UserID: "u1", Username: "peter", RoleIDsJSON: `[]`, RawJSON: `{}`}))
+	base := time.Date(2026, 3, 8, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, s.UpsertMessages(ctx, []store.MessageMutation{
+		{
+			Record: store.MessageRecord{
+				ID:                "m1",
+				GuildID:           "g1",
+				ChannelID:         "c1",
+				ChannelName:       "general",
+				AuthorID:          "u1",
+				AuthorName:        "peter",
+				CreatedAt:         base.Format(time.RFC3339Nano),
+				Content:           "hello <@u1> in <#c1>",
+				NormalizedContent: "hello <@u1> in <#c1>",
+				RawJSON:           `{"author":{"username":"peter"}}`,
+			},
+			Mentions: []store.MentionEventRecord{{
+				MessageID:  "m1",
+				GuildID:    "g1",
+				ChannelID:  "c1",
+				AuthorID:   "u1",
+				TargetType: "user",
+				TargetID:   "u1",
+				TargetName: "peter",
+				EventAt:    base.Format(time.RFC3339Nano),
+			}},
+		},
+		{
+			Record: store.MessageRecord{
+				ID:                "dm-msg",
+				GuildID:           store.DirectMessageGuildID,
+				ChannelID:         "dm1",
+				ChannelName:       "Alice",
+				AuthorID:          "u2",
+				AuthorName:        "Alice",
+				CreatedAt:         base.Add(time.Minute).Format(time.RFC3339Nano),
+				Content:           "private hello",
+				NormalizedContent: "private hello",
+				RawJSON:           `{"source":"discord_desktop"}`,
+			},
+		},
+	}))
 	require.NoError(t, s.Close())
 
 	rt := &runtime{
@@ -1787,11 +2019,23 @@ func TestRuntimeHelpersAndSubcommands(t *testing.T) {
 		require.NoError(t, rt.runMessages([]string{"--channel", "#general", "--hours", "6", "--last", "1"}))
 		require.NoError(t, rt.runMessages([]string{"--channel", "#general", "--days", "7", "--all"}))
 		require.NoError(t, rt.runMessages([]string{"--channel", "#general", "--days", "7", "--all", "--include-empty"}))
+		require.NoError(t, rt.runMessages([]string{"--channel", "#general", "--since", "2026-03-08T00:00:00Z", "--before", "2026-03-09T00:00:00Z", "--limit", "1"}))
+		require.NoError(t, rt.runMessages([]string{"--dm", "--channel", "Alice", "--last", "1"}))
+		require.NoError(t, rt.runDirectMessages([]string{"--list"}))
+		require.NoError(t, rt.runDirectMessages([]string{"--with", "Alice", "--search", "private", "--limit", "1"}))
+		require.NoError(t, rt.runDirectMessages([]string{"--with", "Alice", "--since", "2026-03-08T00:00:00Z", "--before", "2026-03-09T00:00:00Z", "--all"}))
 		require.NoError(t, rt.runMentions([]string{"--channel", "#general", "--target", "u2"}))
+		require.NoError(t, rt.runMentions([]string{"--channel", "#general", "--days", "7", "--type", "user"}))
+		require.NoError(t, rt.runDigest([]string{"--since", "12h", "--channel", "general", "--top-n", "2"}))
+		require.NoError(t, rt.runReport([]string{"--readme", filepath.Join(dir, "README.md")}))
 		require.NoError(t, rt.runSearch([]string{"--include-empty", "Peter"}))
 		require.NoError(t, rt.runChannels([]string{"show", "c1"}))
 		require.NoError(t, rt.runChannels([]string{"list"}))
 		require.NoError(t, rt.runStatus(nil))
+		require.NoError(t, rt.runAnalytics([]string{}))
+		require.NoError(t, rt.runTUI([]string{"--json", "--limit", "1", "--include-empty"}))
+		require.NoError(t, rt.runAnalytics([]string{"quiet", "--since", "1d"}))
+		require.NoError(t, rt.runAnalytics([]string{"trends", "--weeks", "1", "--channel", "general"}))
 		return nil
 	}))
 }

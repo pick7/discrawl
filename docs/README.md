@@ -31,9 +31,9 @@ discrawl search "panic: nil pointer"
 discrawl tail
 ```
 
-`discrawl tui` uses the shared crawlkit terminal explorer: channel/person/thread
-groups on the left, message rows in the middle, and readable message/thread
-detail on the right.
+[`discrawl tui`](commands/tui.html) uses the shared crawlkit terminal explorer:
+channel/person/thread groups on the left, message rows in the middle, and
+readable message/thread detail on the right.
 
 ## Sections
 

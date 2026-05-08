@@ -1,9 +1,12 @@
 package discorddesktop
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -89,4 +92,107 @@ func TestCacheFileHasRouteHint(t *testing.T) {
 	require.False(t, ok)
 	_, err = cacheFileHasRouteHint(root, "missing")
 	require.Error(t, err)
+}
+
+func TestImportAndStateEdgeBranches(t *testing.T) {
+	ctx := context.Background()
+	_, err := Import(ctx, nil, Options{})
+	require.ErrorContains(t, err, "store is required")
+
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	if runtime.GOOS == "linux" {
+		require.Equal(t, filepath.Join(configHome, "discord"), DefaultPath())
+	}
+
+	dir := t.TempDir()
+	s, err := store.Open(ctx, filepath.Join(dir, "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	stats, err := Import(ctx, s, Options{
+		Path: dir,
+		Now:  func() time.Time { return time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC) },
+	})
+	require.NoError(t, err)
+	require.Equal(t, dir, stats.Path)
+	require.Equal(t, 1, stats.Checkpoints)
+
+	stats, err = Import(ctx, nil, Options{Path: filepath.Join(dir, "missing"), DryRun: true})
+	require.NoError(t, err)
+	require.True(t, stats.DryRun)
+
+	stats, err = Import(ctx, nil, Options{Path: dir, DryRun: true, FullCache: true})
+	require.NoError(t, err)
+	require.True(t, stats.FullCache)
+
+	require.NoError(t, s.SetSyncState(ctx, fileIndexScope(Options{}), "{not-json"))
+	require.NoError(t, s.UpsertChannel(ctx, store.ChannelRecord{ID: "c1", GuildID: "g1", Kind: "text", Name: "general", RawJSON: `{}`}))
+	state, err := loadScanState(ctx, s, Options{})
+	require.NoError(t, err)
+	require.Empty(t, state.previous)
+	require.Equal(t, "general", state.channels["c1"].Name)
+}
+
+func TestSnapshotFinalizeAndCommitBranches(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	snap := newSnapshot()
+	snap.messages["m-missing"] = store.MessageMutation{
+		Record: store.MessageRecord{ID: "m-missing", ChannelID: "c-missing", RawJSON: `{}`},
+	}
+	snap.messages["m-known"] = store.MessageMutation{
+		Record: store.MessageRecord{ID: "m-known", GuildID: "g1", ChannelID: "c1", ChannelName: "general", RawJSON: `{}`},
+	}
+	stats := &Stats{}
+	totals := newScanTotals()
+	unresolved := finalizeSnapshot(snap, map[string]store.ChannelRecord{
+		"c1": {ID: "c1", GuildID: "g1", Kind: "text", Name: "general", RawJSON: `{}`},
+	}, totals, stats, true)
+	require.Equal(t, unresolvedMessages{"m-missing": "c-missing"}, unresolved)
+	require.Equal(t, 1, stats.Messages)
+	require.Equal(t, 1, stats.SkippedMessages)
+	require.Equal(t, "general", snap.channels["c1"].Name)
+	require.Equal(t, "g1", snap.guilds["g1"].ID)
+
+	more := unresolvedMessages{"m2": "c2"}
+	mergeUnresolved(unresolved, more)
+	recordUnresolved(unresolved, totals, stats)
+	require.Equal(t, 2, stats.SkippedMessages)
+
+	state := scanState{current: map[string]fileFingerprint{}}
+	candidates := []fileCandidate{{relKey: "Cache_Data/entry", fingerprint: fileFingerprint{Size: 10, ModUnixNS: 20}}}
+	require.NoError(t, commitSnapshot(ctx, s, Options{DryRun: true}, state, candidates, newSnapshot(), true, stats))
+	require.NoError(t, commitSnapshot(ctx, s, Options{}, state, candidates, newSnapshot(), false, stats))
+	require.NoError(t, commitSnapshot(ctx, s, Options{}, state, candidates, newSnapshot(), true, stats))
+	require.True(t, isImportedFingerprint(state.current["Cache_Data/entry"]))
+
+	require.NoError(t, checkpointScannedCandidates(ctx, s, Options{DryRun: true}, state, candidates, stats))
+	require.NoError(t, checkpointScannedCandidates(ctx, s, Options{}, state, candidates, stats))
+}
+
+func TestRouteHintCollectionBranches(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "route"), []byte("https://discord.com/channels/123456789012/111111111111111121"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "plain"), []byte("plain"), 0o600))
+
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	defer func() { _ = root.Close() }()
+
+	snap := newSnapshot()
+	err = collectCacheRouteHints(context.Background(), root, []fileCandidate{
+		{relPath: "missing"},
+		{relPath: "plain"},
+		{relPath: "route"},
+	}, snap)
+	require.NoError(t, err)
+	require.Equal(t, "123456789012", snap.routes["111111111111111121"])
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, collectCacheRouteHints(canceled, root, []fileCandidate{{relPath: "route"}}, newSnapshot()), context.Canceled)
 }
