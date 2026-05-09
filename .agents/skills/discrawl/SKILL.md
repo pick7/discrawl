@@ -1,6 +1,6 @@
 ---
 name: discrawl
-description: Use for local Discord archive search, sync freshness, DMs, channel summaries, desktop/API/git-share sources, TUI browsing, and Discrawl repo/release work.
+description: "Discord archive: search, sync freshness, DMs, summaries, TUI, repo/release work."
 ---
 
 # Discrawl
