@@ -109,17 +109,29 @@ func (s *Syncer) appendThreadCatalog(ctx context.Context, allChannels map[string
 		if !isThreadParent(channel) {
 			continue
 		}
-		if err := s.appendActiveThreads(ctx, allChannels, channel.ID); err != nil {
+		unavailable, err := s.appendActiveThreads(ctx, allChannels, channel.ID, false)
+		if err != nil {
 			return err
 		}
+		failed := unavailable
 		for _, private := range []bool{false, true} {
 			archived, err := s.client.ThreadsArchived(ctx, channel.ID, private)
 			if err != nil {
+				if s.skipThreadCatalogUnavailableChannelByID(ctx, channel.ID, err, "thread archive crawl failed") {
+					failed = true
+					continue
+				}
 				s.logger.Warn("thread archive crawl failed", "channel_id", channel.ID, "private", private, "err", err)
+				failed = true
 				continue
 			}
 			for _, thread := range archived {
 				allChannels[thread.ID] = thread
+			}
+		}
+		if !failed {
+			if err := s.clearThreadCatalogUnavailableChannel(ctx, channel.ID); err != nil {
+				return err
 			}
 		}
 	}
@@ -158,18 +170,30 @@ func (s *Syncer) appendActiveThreadCatalog(ctx context.Context, allChannels map[
 	return nil
 }
 
-func (s *Syncer) appendActiveThreads(ctx context.Context, allChannels map[string]*discordgo.Channel, channelID string) error {
+func (s *Syncer) appendActiveThreads(ctx context.Context, allChannels map[string]*discordgo.Channel, channelID string, clearOnSuccess bool) (bool, error) {
 	active, err := s.client.ThreadsActive(ctx, channelID)
 	if err != nil {
-		if s.skipUnavailableChannelByID(ctx, channelID, err, "channel thread crawl skipped") {
-			return nil
+		if s.skipThreadCatalogUnavailableChannelByID(ctx, channelID, err, "channel thread crawl skipped") {
+			return true, nil
 		}
-		return err
+		return false, err
+	}
+	if clearOnSuccess {
+		if err := s.clearThreadCatalogUnavailableChannel(ctx, channelID); err != nil {
+			return false, err
+		}
 	}
 	for _, thread := range active {
 		allChannels[thread.ID] = thread
 	}
-	return nil
+	return false, nil
+}
+
+func (s *Syncer) clearThreadCatalogUnavailableChannel(ctx context.Context, channelID string) error {
+	if s == nil || s.store == nil || channelID == "" {
+		return nil
+	}
+	return s.store.DeleteSyncState(ctx, channelThreadCatalogUnavailableScope(channelID))
 }
 
 func mapsToSlice(in map[string]*discordgo.Channel) []*discordgo.Channel {

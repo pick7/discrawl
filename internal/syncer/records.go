@@ -209,6 +209,14 @@ func channelHistoryCompleteScope(channelID string) string {
 	return "channel:" + channelID + ":history_complete"
 }
 
+func channelMessageUnavailableScope(channelID string) string {
+	return "channel:" + channelID + ":unavailable"
+}
+
+func channelThreadCatalogUnavailableScope(channelID string) string {
+	return "channel:" + channelID + ":thread_catalog_unavailable"
+}
+
 func makeGuildSet(ids []string) map[string]struct{} {
 	if len(ids) == 0 {
 		return nil

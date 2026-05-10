@@ -829,12 +829,61 @@ func TestSyncSkipsMissingAccessChannels(t *testing.T) {
 		},
 	}
 
-	svc := New(client, s, nil)
+	out := &lockedBuffer{}
+	svc := New(client, s, newTestLogger(out))
 	stats, err := svc.Sync(ctx, SyncOptions{Full: true, Concurrency: 2})
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Messages)
 
-	cursor, err := s.GetSyncState(ctx, "channel:c2:unavailable")
+	logs := out.String()
+	require.Contains(t, logs, `level=WARN msg="channel message crawl skipped"`)
+	require.Contains(t, logs, `channel_id=c2`)
+
+	cursor, err := s.GetSyncState(ctx, channelMessageUnavailableScope("c2"))
+	require.NoError(t, err)
+	require.Equal(t, "missing_access", cursor)
+}
+
+func TestSyncSuppressesRepeatedMissingAccessWarnings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	require.NoError(t, s.SetSyncState(ctx, channelMessageUnavailableScope("c2"), "missing_access"))
+
+	client := &fakeClient{
+		guilds: []*discordgo.UserGuild{{ID: "g1", Name: "Guild"}},
+		guildByID: map[string]*discordgo.Guild{
+			"g1": {ID: "g1", Name: "Guild"},
+		},
+		channels: map[string][]*discordgo.Channel{
+			"g1": {
+				{ID: "c1", GuildID: "g1", Name: "general", Type: discordgo.ChannelTypeGuildText},
+				{ID: "c2", GuildID: "g1", Name: "private", Type: discordgo.ChannelTypeGuildText},
+			},
+		},
+		messages: map[string][]*discordgo.Message{
+			"c1": {{ID: "10", GuildID: "g1", ChannelID: "c1", Content: "ok", Timestamp: time.Now().UTC(), Author: &discordgo.User{ID: "u1", Username: "user"}}},
+		},
+		messageErrors: map[string]error{
+			"c2": errors.New("HTTP 403 Forbidden, {\"message\": \"Missing Access\", \"code\": 50001}"),
+		},
+	}
+
+	out := &lockedBuffer{}
+	svc := New(client, s, newTestLogger(out))
+	stats, err := svc.Sync(ctx, SyncOptions{Full: true, Concurrency: 2})
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Messages)
+
+	logs := out.String()
+	require.NotContains(t, logs, `msg="channel message crawl skipped"`)
+	require.Contains(t, logs, `skipped_missing_access_channels=1`)
+
+	cursor, err := s.GetSyncState(ctx, channelMessageUnavailableScope("c2"))
 	require.NoError(t, err)
 	require.Equal(t, "missing_access", cursor)
 }

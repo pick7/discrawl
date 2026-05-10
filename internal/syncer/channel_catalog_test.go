@@ -128,10 +128,9 @@ func TestSyncToleratesArchivedThread403(t *testing.T) {
 
 	// Discord blocks archived thread listing on community Rules Screening channels
 	// even for bots with Administrator permission. A 403 from ThreadsArchived
-	// (for either public or private) should be logged and skipped, not abort the
-	// entire sync. The archived loop uses continue, so no unavailable marker is
-	// written for the channel — only active-thread 403s go through
-	// skipUnavailableChannelByID.
+	// (for either public or private) should be skipped, not abort the entire sync,
+	// and repeat unavailable warnings should be suppressed until the catalog
+	// succeeds again.
 	ctx := context.Background()
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
 	require.NoError(t, err)
@@ -165,7 +164,8 @@ func TestSyncToleratesArchivedThread403(t *testing.T) {
 		},
 	}
 
-	svc := New(client, s, nil)
+	out := &lockedBuffer{}
+	svc := New(client, s, newTestLogger(out))
 	stats, err := svc.Sync(ctx, SyncOptions{Full: true, GuildIDs: []string{"g1"}})
 	require.NoError(t, err)
 	// ThreadsArchived was invoked for "rules" (public + private),
@@ -173,10 +173,38 @@ func TestSyncToleratesArchivedThread403(t *testing.T) {
 	require.Equal(t, 2, client.archivedCalls["rules"])
 	require.Equal(t, 1, stats.Messages)
 	require.Equal(t, 1, client.messageCalls["c1"])
+	require.Contains(t, out.String(), `level=WARN msg="thread archive crawl failed"`)
 
-	cursor, err := s.GetSyncState(ctx, "channel:rules:unavailable")
+	cursor, err := s.GetSyncState(ctx, channelMessageUnavailableScope("rules"))
 	require.NoError(t, err)
 	require.Empty(t, cursor)
+
+	cursor, err = s.GetSyncState(ctx, channelThreadCatalogUnavailableScope("rules"))
+	require.NoError(t, err)
+	require.Equal(t, "missing_access", cursor)
+
+	out = &lockedBuffer{}
+	svc = New(client, s, newTestLogger(out))
+	allChannels := map[string]*discordgo.Channel{"rules": client.channels["g1"][1]}
+	require.NoError(t, svc.appendThreadCatalog(ctx, allChannels, []string{"rules"}))
+	require.NotContains(t, out.String(), `level=WARN msg="thread archive crawl failed"`)
+
+	client.archivedErrors = nil
+	out = &lockedBuffer{}
+	svc = New(client, s, newTestLogger(out))
+	require.NoError(t, svc.appendThreadCatalog(ctx, allChannels, []string{"rules"}))
+
+	cursor, err = s.GetSyncState(ctx, channelThreadCatalogUnavailableScope("rules"))
+	require.NoError(t, err)
+	require.Empty(t, cursor)
+
+	client.archivedErrors = map[string]error{
+		"rules": errMissingAccess(),
+	}
+	out = &lockedBuffer{}
+	svc = New(client, s, newTestLogger(out))
+	require.NoError(t, svc.appendThreadCatalog(ctx, allChannels, []string{"rules"}))
+	require.Contains(t, out.String(), `level=WARN msg="thread archive crawl failed"`)
 }
 
 func TestSyncSkipsInaccessibleForumThreadCatalog(t *testing.T) {
@@ -222,9 +250,89 @@ func TestSyncSkipsInaccessibleForumThreadCatalog(t *testing.T) {
 	require.Equal(t, 1, client.messageCalls["c1"])
 	require.GreaterOrEqual(t, client.threadCalls, 1)
 
-	cursor, err := s.GetSyncState(ctx, "channel:f1:unavailable")
+	cursor, err := s.GetSyncState(ctx, channelThreadCatalogUnavailableScope("f1"))
 	require.NoError(t, err)
 	require.Equal(t, "missing_access", cursor)
+}
+
+func TestSyncKeepsThreadCatalogUnavailableMarkerAfterMessageRead(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	require.NoError(t, s.UpsertGuild(ctx, store.GuildRecord{ID: "g1", Name: "Guild", RawJSON: `{}`}))
+
+	client := &fakeClient{
+		guilds: []*discordgo.UserGuild{{ID: "g1", Name: "Guild"}},
+		guildByID: map[string]*discordgo.Guild{
+			"g1": {ID: "g1", Name: "Guild"},
+		},
+		channels: map[string][]*discordgo.Channel{
+			"g1": {
+				{ID: "c1", GuildID: "g1", Name: "general", Type: discordgo.ChannelTypeGuildText},
+			},
+		},
+		threadErrors: map[string]error{
+			"c1": errMissingAccess(),
+		},
+		messages: map[string][]*discordgo.Message{
+			"c1": {{
+				ID:        "10",
+				GuildID:   "g1",
+				ChannelID: "c1",
+				Content:   "still readable",
+				Timestamp: time.Now().UTC(),
+				Author:    &discordgo.User{ID: "u1", Username: "user"},
+			}},
+		},
+	}
+
+	out := &lockedBuffer{}
+	svc := New(client, s, newTestLogger(out))
+	stats, err := svc.Sync(ctx, SyncOptions{Full: true, GuildIDs: []string{"g1"}})
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Messages)
+	require.Equal(t, 1, client.messageCalls["c1"])
+
+	unavailable, err := s.GetSyncState(ctx, channelMessageUnavailableScope("c1"))
+	require.NoError(t, err)
+	require.Empty(t, unavailable)
+
+	threadUnavailable, err := s.GetSyncState(ctx, channelThreadCatalogUnavailableScope("c1"))
+	require.NoError(t, err)
+	require.Equal(t, "missing_access", threadUnavailable)
+
+	out = &lockedBuffer{}
+	svc = New(client, s, newTestLogger(out))
+	stats, err = svc.Sync(ctx, SyncOptions{Full: true, GuildIDs: []string{"g1"}})
+	require.NoError(t, err)
+	require.Zero(t, stats.Messages)
+	require.NotContains(t, out.String(), `level=WARN msg="channel thread crawl skipped"`)
+
+	client.threadErrors = nil
+	out = &lockedBuffer{}
+	svc = New(client, s, newTestLogger(out))
+	allChannels := map[string]*discordgo.Channel{"c1": client.channels["g1"][0]}
+	activeUnavailable, err := svc.appendActiveThreads(ctx, allChannels, "c1", true)
+	require.NoError(t, err)
+	require.False(t, activeUnavailable)
+
+	threadUnavailable, err = s.GetSyncState(ctx, channelThreadCatalogUnavailableScope("c1"))
+	require.NoError(t, err)
+	require.Empty(t, threadUnavailable)
+
+	client.threadErrors = map[string]error{
+		"c1": errMissingAccess(),
+	}
+	out = &lockedBuffer{}
+	svc = New(client, s, newTestLogger(out))
+	activeUnavailable, err = svc.appendActiveThreads(ctx, allChannels, "c1", true)
+	require.NoError(t, err)
+	require.True(t, activeUnavailable)
+	require.Contains(t, out.String(), `level=WARN msg="channel thread crawl skipped"`)
 }
 
 func TestSyncChannelSubsetMergesStoredAndLiveTargets(t *testing.T) {

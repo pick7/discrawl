@@ -9,6 +9,7 @@
 ### Fixes
 
 - `help search`, `search --help`, `messages --help`, and `sql --help` now print focused command help without opening config, stores, or triggering Git snapshot auto-update.
+- `discrawl sync` now warns once for newly discovered Discord Missing Access / Unknown Channel skips, then keeps repeat unavailable-channel skips out of normal logs while preserving summary counts.
 
 ## 0.7.0 - 2026-05-08
 

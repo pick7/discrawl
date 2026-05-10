@@ -190,7 +190,7 @@ func (s *Syncer) clearUnavailableChannel(ctx context.Context, channelID string) 
 	if s == nil || s.store == nil || channelID == "" {
 		return nil
 	}
-	return s.store.DeleteSyncState(ctx, "channel:"+channelID+":unavailable")
+	return s.store.DeleteSyncState(ctx, channelMessageUnavailableScope(channelID))
 }
 
 func (s *Syncer) messageChannelContext(ctx context.Context) (context.Context, context.CancelFunc) {
