@@ -1084,6 +1084,93 @@ func (q *Queries) ListPendingEmbeddingJobs(ctx context.Context, arg ListPendingE
 	return items, nil
 }
 
+const listRecentMemberMessages = `-- name: ListRecentMemberMessages :many
+select
+	m.id as message_id,
+	m.guild_id,
+	m.channel_id,
+	coalesce(c.name, '') as channel_name,
+	coalesce(m.author_id, '') as author_id,
+	cast(coalesce(
+		nullif(mem.display_name, ''),
+		nullif(mem.nick, ''),
+		nullif(mem.global_name, ''),
+		nullif(mem.username, ''),
+		nullif(json_extract(m.raw_json, '$.author.global_name'), ''),
+		nullif(json_extract(m.raw_json, '$.author.username'), ''),
+		''
+	) as text) as author_name,
+	cast(case
+		when trim(coalesce(m.content, '')) <> '' then m.content
+		else m.normalized_content
+	end as text) as content,
+	m.created_at,
+	coalesce(m.reply_to_message_id, '') as reply_to_message,
+	m.has_attachments,
+	m.pinned
+from messages m
+left join channels c on c.id = m.channel_id
+left join members mem on mem.guild_id = m.guild_id and mem.user_id = m.author_id
+where m.guild_id = ? and m.author_id = ?
+order by m.created_at desc, m.id desc
+limit ?
+`
+
+type ListRecentMemberMessagesParams struct {
+	GuildID  string
+	AuthorID sql.NullString
+	Limit    int64
+}
+
+type ListRecentMemberMessagesRow struct {
+	MessageID      string
+	GuildID        string
+	ChannelID      string
+	ChannelName    string
+	AuthorID       string
+	AuthorName     string
+	Content        string
+	CreatedAt      string
+	ReplyToMessage string
+	HasAttachments int64
+	Pinned         int64
+}
+
+func (q *Queries) ListRecentMemberMessages(ctx context.Context, arg ListRecentMemberMessagesParams) ([]ListRecentMemberMessagesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecentMemberMessages, arg.GuildID, arg.AuthorID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentMemberMessagesRow
+	for rows.Next() {
+		var i ListRecentMemberMessagesRow
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.ChannelName,
+			&i.AuthorID,
+			&i.AuthorName,
+			&i.Content,
+			&i.CreatedAt,
+			&i.ReplyToMessage,
+			&i.HasAttachments,
+			&i.Pinned,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockEmbeddingJob = `-- name: LockEmbeddingJob :execrows
 update embedding_jobs
 set locked_at = ?1, updated_at = ?2
@@ -1261,6 +1348,32 @@ type MarkMessageDeletedParams struct {
 func (q *Queries) MarkMessageDeleted(ctx context.Context, arg MarkMessageDeletedParams) error {
 	_, err := q.db.ExecContext(ctx, markMessageDeleted, arg.DeletedAt, arg.UpdatedAt, arg.ID)
 	return err
+}
+
+const memberMessageStats = `-- name: MemberMessageStats :one
+select count(*) as message_count,
+       cast(coalesce(min(created_at), '') as text) as first_message_at,
+       cast(coalesce(max(created_at), '') as text) as last_message_at
+from messages
+where guild_id = ? and author_id = ?
+`
+
+type MemberMessageStatsParams struct {
+	GuildID  string
+	AuthorID sql.NullString
+}
+
+type MemberMessageStatsRow struct {
+	MessageCount   int64
+	FirstMessageAt string
+	LastMessageAt  string
+}
+
+func (q *Queries) MemberMessageStats(ctx context.Context, arg MemberMessageStatsParams) (MemberMessageStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, memberMessageStats, arg.GuildID, arg.AuthorID)
+	var i MemberMessageStatsRow
+	err := row.Scan(&i.MessageCount, &i.FirstMessageAt, &i.LastMessageAt)
+	return i, err
 }
 
 const requeueAllEmbeddingJobs = `-- name: RequeueAllEmbeddingJobs :execrows

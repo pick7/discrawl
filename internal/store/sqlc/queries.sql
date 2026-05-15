@@ -123,6 +123,44 @@ from members
 where user_id = ?
 order by guild_id, username;
 
+-- name: MemberMessageStats :one
+select count(*) as message_count,
+       cast(coalesce(min(created_at), '') as text) as first_message_at,
+       cast(coalesce(max(created_at), '') as text) as last_message_at
+from messages
+where guild_id = ? and author_id = ?;
+
+-- name: ListRecentMemberMessages :many
+select
+	m.id as message_id,
+	m.guild_id,
+	m.channel_id,
+	coalesce(c.name, '') as channel_name,
+	coalesce(m.author_id, '') as author_id,
+	cast(coalesce(
+		nullif(mem.display_name, ''),
+		nullif(mem.nick, ''),
+		nullif(mem.global_name, ''),
+		nullif(mem.username, ''),
+		nullif(json_extract(m.raw_json, '$.author.global_name'), ''),
+		nullif(json_extract(m.raw_json, '$.author.username'), ''),
+		''
+	) as text) as author_name,
+	cast(case
+		when trim(coalesce(m.content, '')) <> '' then m.content
+		else m.normalized_content
+	end as text) as content,
+	m.created_at,
+	coalesce(m.reply_to_message_id, '') as reply_to_message,
+	m.has_attachments,
+	m.pinned
+from messages m
+left join channels c on c.id = m.channel_id
+left join members mem on mem.guild_id = m.guild_id and mem.user_id = m.author_id
+where m.guild_id = ? and m.author_id = ?
+order by m.created_at desc, m.id desc
+limit ?;
+
 -- name: ListChannels :many
 select id, guild_id, coalesce(parent_id, '') as parent_id, kind, name,
        coalesce(topic, '') as topic, position, is_nsfw, is_archived,
