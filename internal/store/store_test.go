@@ -1413,11 +1413,14 @@ func TestUpsertAndDeleteMember(t *testing.T) {
 		Username:    "peter",
 		DisplayName: "Peter",
 		RoleIDsJSON: `[]`,
-		RawJSON:     `{}`,
+		RawJSON:     `{"bio":"Builds tools","github":"steipete","url":"https://steipete.me"}`,
 	}))
 	rows, err := s.MemberByID(ctx, "u1")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
+	require.Equal(t, "Builds tools", rows[0].Bio)
+	require.Equal(t, "steipete", rows[0].GitHubLogin)
+	require.Equal(t, "https://steipete.me", rows[0].Website)
 
 	require.NoError(t, s.DeleteMember(ctx, "g1", "u1"))
 	rows, err = s.MemberByID(ctx, "u1")
@@ -1429,12 +1432,13 @@ func TestUpsertAndDeleteMember(t *testing.T) {
 		UserID:      "u2",
 		Username:    "other",
 		RoleIDsJSON: `[]`,
-		RawJSON:     `{}`,
+		RawJSON:     `{"bio":"Other bio"}`,
 	}}))
 	rows, err = s.Members(ctx, "g1", "", 10)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "u2", rows[0].UserID)
+	require.Equal(t, "Other bio", rows[0].Bio)
 }
 
 func TestOpenTightensDBFilePerms(t *testing.T) {

@@ -495,7 +495,7 @@ func (s *Store) Members(ctx context.Context, guildID, query string, limit int) (
 		}
 		out = make([]MemberRow, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, MemberRow{
+			member := MemberRow{
 				GuildID:       row.GuildID,
 				UserID:        row.UserID,
 				Username:      row.Username,
@@ -508,7 +508,9 @@ func (s *Store) Members(ctx context.Context, guildID, query string, limit int) (
 				Bot:           row.Bot == 1,
 				JoinedAt:      parseTime(row.JoinedAt),
 				RawJSON:       row.RawJson,
-			})
+			}
+			enrichMemberRow(&member)
+			out = append(out, member)
 		}
 		return out, nil
 	}
@@ -518,7 +520,7 @@ func (s *Store) Members(ctx context.Context, guildID, query string, limit int) (
 	}
 	out = make([]MemberRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, MemberRow{
+		member := MemberRow{
 			GuildID:       row.GuildID,
 			UserID:        row.UserID,
 			Username:      row.Username,
@@ -531,7 +533,9 @@ func (s *Store) Members(ctx context.Context, guildID, query string, limit int) (
 			Bot:           row.Bot == 1,
 			JoinedAt:      parseTime(row.JoinedAt),
 			RawJSON:       row.RawJson,
-		})
+		}
+		enrichMemberRow(&member)
+		out = append(out, member)
 	}
 	return out, nil
 }
@@ -543,7 +547,7 @@ func (s *Store) MemberByID(ctx context.Context, userID string) ([]MemberRow, err
 	}
 	out := make([]MemberRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, MemberRow{
+		member := MemberRow{
 			GuildID:       row.GuildID,
 			UserID:        row.UserID,
 			Username:      row.Username,
@@ -556,7 +560,9 @@ func (s *Store) MemberByID(ctx context.Context, userID string) ([]MemberRow, err
 			Bot:           row.Bot == 1,
 			JoinedAt:      parseTime(row.JoinedAt),
 			RawJSON:       row.RawJson,
-		})
+		}
+		enrichMemberRow(&member)
+		out = append(out, member)
 	}
 	return out, nil
 }
