@@ -25,7 +25,7 @@ func TestSQLCSchemaMirrorsRuntimeTables(t *testing.T) {
 
 	body, err := os.ReadFile(filepath.Join("sqlc", "schema.sql"))
 	require.NoError(t, err)
-	for _, stmt := range strings.Split(string(body), ";") {
+	for stmt := range strings.SplitSeq(string(body), ";") {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" || strings.HasPrefix(stmt, "--") {
 			continue
@@ -46,14 +46,14 @@ func TestSQLCSchemaMirrorsRuntimeTables(t *testing.T) {
 		"embedding_jobs",
 		"message_embeddings",
 	} {
-		require.Equal(t, tableColumns(t, runtimeStore.DB(), table), tableColumns(t, schemaDB, table), table)
+		require.Equal(t, tableColumns(ctx, t, runtimeStore.DB(), table), tableColumns(ctx, t, schemaDB, table), table)
 	}
 }
 
-func tableColumns(t *testing.T, db *sql.DB, table string) []string {
+func tableColumns(ctx context.Context, t *testing.T, db *sql.DB, table string) []string {
 	t.Helper()
 
-	rows, err := db.Query(`pragma table_info(` + table + `)`)
+	rows, err := db.QueryContext(ctx, `pragma table_info(`+table+`)`)
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 

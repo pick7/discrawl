@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/openclaw/discrawl/internal/store/storedb"
@@ -295,7 +296,7 @@ func upsertMessageTx(ctx context.Context, tx *sql.Tx, qtx *storedb.Queries, mess
 	if opts.EnqueueEmbedding {
 		normalized, err := qtx.GetMessageNormalizedContent(ctx, message.ID)
 		previousErr = err
-		if previousErr != nil && previousErr != sql.ErrNoRows {
+		if previousErr != nil && !errors.Is(previousErr, sql.ErrNoRows) {
 			return previousErr
 		}
 		if previousErr == nil {
@@ -321,7 +322,7 @@ func upsertMessageTx(ctx context.Context, tx *sql.Tx, qtx *storedb.Queries, mess
 			return err
 		}
 	}
-	queueEmbedding := opts.EnqueueEmbedding && (previousErr == sql.ErrNoRows || previousNormalized.String != message.NormalizedContent || !jobExists)
+	queueEmbedding := opts.EnqueueEmbedding && (errors.Is(previousErr, sql.ErrNoRows) || previousNormalized.String != message.NormalizedContent || !jobExists)
 	if queueEmbedding {
 		if err := qtx.UpsertEmbeddingJobPending(ctx, storedb.UpsertEmbeddingJobPendingParams{MessageID: message.ID, UpdatedAt: now}); err != nil {
 			return err

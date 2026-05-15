@@ -45,7 +45,7 @@ type SemanticSearchOptions struct {
 func (s *Store) GetSyncState(ctx context.Context, scope string) (string, error) {
 	cursor, err := s.q.GetSyncState(ctx, scope)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", nil
 		}
 		return "", err
@@ -670,18 +670,18 @@ func (s *Store) Status(ctx context.Context, dbPath, defaultGuildID string) (Stat
 	status.ThreadCount = int(threadCount)
 
 	lastSync, err := s.q.GetSyncUpdatedAt(ctx, "sync:last_success")
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Status{}, err
 	}
 	status.LastSyncAt = parseTime(lastSync)
 	lastTail, err := s.q.GetSyncUpdatedAt(ctx, "tail:last_event")
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Status{}, err
 	}
 	status.LastTailEventAt = parseTime(lastTail)
 	if defaultGuildID != "" {
 		name, err := s.q.GetGuildName(ctx, defaultGuildID)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return Status{}, err
 		}
 		status.DefaultGuildName = name
