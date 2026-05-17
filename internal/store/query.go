@@ -208,16 +208,7 @@ func (s *Store) SearchMessagesSemantic(ctx context.Context, opts SemanticSearchO
 	defer cancel()
 	rows, err := s.db.QueryContext(queryCtx, `
 		select
-			m.id,
-			m.guild_id,
-			m.channel_id,
-			coalesce(c.name, ''),
-			coalesce(m.author_id, ''),
-			`+authorExpr+`,
-			case
-				when trim(coalesce(m.content, '')) <> '' then m.content
-				else m.normalized_content
-			end,
+			e.message_id,
 			m.created_at,
 			e.dimensions,
 			e.embedding_blob
@@ -234,32 +225,32 @@ func (s *Store) SearchMessagesSemantic(ctx context.Context, opts SemanticSearchO
 	scored := make([]semanticScoredResult, 0, opts.Limit)
 	for rows.Next() {
 		var (
-			row        SearchResult
+			messageID  string
 			created    string
 			dimensions int
 			blob       []byte
 		)
-		if err := rows.Scan(&row.MessageID, &row.GuildID, &row.ChannelID, &row.ChannelName, &row.AuthorID, &row.AuthorName, &row.Content, &created, &dimensions, &blob); err != nil {
+		if err := rows.Scan(&messageID, &created, &dimensions, &blob); err != nil {
 			return nil, err
 		}
 		if dimensions != opts.Dimensions {
-			return nil, fmt.Errorf("stored embedding dimensions mismatch for message %s: got %d want %d", row.MessageID, dimensions, opts.Dimensions)
+			return nil, fmt.Errorf("stored embedding dimensions mismatch for message %s: got %d want %d", messageID, dimensions, opts.Dimensions)
 		}
 		storedVector, err := DecodeEmbeddingVector(blob)
 		if err != nil {
-			return nil, fmt.Errorf("decode embedding for message %s: %w", row.MessageID, err)
+			return nil, fmt.Errorf("decode embedding for message %s: %w", messageID, err)
 		}
 		if len(storedVector) != dimensions {
-			return nil, fmt.Errorf("stored embedding vector length mismatch for message %s: got %d want %d", row.MessageID, len(storedVector), dimensions)
+			return nil, fmt.Errorf("stored embedding vector length mismatch for message %s: got %d want %d", messageID, len(storedVector), dimensions)
 		}
 		score, err := vector.CosineSimilarity(opts.QueryVector, queryNorm, storedVector)
 		if err != nil {
 			if strings.Contains(err.Error(), "candidate vector is zero") {
-				return nil, fmt.Errorf("score embedding for message %s: stored embedding vector is zero", row.MessageID)
+				return nil, fmt.Errorf("score embedding for message %s: stored embedding vector is zero", messageID)
 			}
-			return nil, fmt.Errorf("score embedding for message %s: %w", row.MessageID, err)
+			return nil, fmt.Errorf("score embedding for message %s: %w", messageID, err)
 		}
-		row.CreatedAt = parseTime(created)
+		row := SearchResult{MessageID: messageID, CreatedAt: parseTime(created)}
 		item := semanticScoredResult{result: row, score: score}
 		insertAt := sort.Search(len(scored), func(i int) bool {
 			return semanticScoreLess(item, scored[i])
@@ -287,11 +278,72 @@ func (s *Store) SearchMessagesSemantic(ctx context.Context, opts SemanticSearchO
 		}
 		return []SearchResult{}, nil
 	}
+	ids := make([]string, 0, len(scored))
+	for _, item := range scored {
+		ids = append(ids, item.result.MessageID)
+	}
+	details, err := s.searchResultDetails(queryCtx, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]SearchResult, 0, len(scored))
 	for _, item := range scored {
-		out = append(out, item.result)
+		row, ok := details[item.result.MessageID]
+		if !ok {
+			return nil, fmt.Errorf("semantic search result %s disappeared before hydration", item.result.MessageID)
+		}
+		row.CreatedAt = item.result.CreatedAt
+		out = append(out, row)
 	}
 	return out, nil
+}
+
+func (s *Store) searchResultDetails(ctx context.Context, messageIDs []string) (map[string]SearchResult, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(messageIDs))
+	for _, messageID := range messageIDs {
+		args = append(args, messageID)
+	}
+	authorExpr := `coalesce(
+		json_extract(m.raw_json, '$.member.nick'),
+		json_extract(m.raw_json, '$.author.global_name'),
+		json_extract(m.raw_json, '$.author.username'),
+		''
+	)`
+	rows, err := s.db.QueryContext(ctx, `
+		select
+			m.id,
+			m.guild_id,
+			m.channel_id,
+			coalesce(c.name, ''),
+			coalesce(m.author_id, ''),
+			`+authorExpr+`,
+			case
+				when trim(coalesce(m.content, '')) <> '' then m.content
+				else m.normalized_content
+			end,
+			m.created_at
+		from messages m
+		left join channels c on c.id = m.channel_id
+		where m.id in (`+placeholders(len(messageIDs))+`)
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]SearchResult, len(messageIDs))
+	for rows.Next() {
+		var row SearchResult
+		var created string
+		if err := rows.Scan(&row.MessageID, &row.GuildID, &row.ChannelID, &row.ChannelName, &row.AuthorID, &row.AuthorName, &row.Content, &created); err != nil {
+			return nil, err
+		}
+		row.CreatedAt = parseTime(created)
+		out[row.MessageID] = row
+	}
+	return out, rows.Err()
 }
 
 type semanticScoredResult struct {
