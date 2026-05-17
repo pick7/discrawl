@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -138,6 +139,18 @@ func TestSearchFallbackFilters(t *testing.T) {
 	results, err = s.searchFallback(ctx, SearchOptions{Query: "", IncludeEmpty: true, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, results, 3)
+
+	require.False(t, shouldSearchFallback(context.Canceled))
+	require.False(t, shouldSearchFallback(context.DeadlineExceeded))
+	require.False(t, shouldSearchFallback(os.ErrClosed))
+	require.True(t, shouldSearchFallback(errors.New("no such table: message_fts")))
+
+	_, err = s.DB().ExecContext(ctx, `drop table message_fts`)
+	require.NoError(t, err)
+	results, err = s.SearchMessages(ctx, SearchOptions{Query: "needle", GuildIDs: []string{"g1"}, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "m1", results[0].MessageID)
 }
 
 func TestStoreMaintenanceHelpers(t *testing.T) {

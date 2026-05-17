@@ -119,6 +119,9 @@ func (s *Store) SearchMessages(ctx context.Context, opts SearchOptions) ([]Searc
 	defer cancel()
 	rows, err := s.db.QueryContext(queryCtx, query, append(args[:len(args)-1], opts.IncludeEmpty, args[len(args)-1])...)
 	if err != nil {
+		if !shouldSearchFallback(err) {
+			return nil, err
+		}
 		fallbackCtx, fallbackCancel := withQueryTimeout(ctx)
 		defer fallbackCancel()
 		return s.searchFallback(fallbackCtx, opts)
@@ -135,6 +138,16 @@ func (s *Store) SearchMessages(ctx context.Context, opts SearchOptions) ([]Searc
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+func shouldSearchFallback(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such table: message_fts") ||
+		strings.Contains(message, "no such module: fts5") ||
+		strings.Contains(message, "vtable constructor failed")
 }
 
 func (s *Store) SearchMessagesSemantic(ctx context.Context, opts SemanticSearchOptions) ([]SearchResult, error) {
