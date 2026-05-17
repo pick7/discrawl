@@ -5,11 +5,23 @@ Discrawl is a single Go binary. Install via Homebrew or build from source.
 ## Homebrew
 
 ```bash
-brew install steipete/tap/discrawl
+brew install openclaw/tap/discrawl
 discrawl --version
 ```
 
-The tap auto-installs from `steipete/tap`.
+The tap auto-installs from `openclaw/tap`.
+
+## Check for updates
+
+```bash
+discrawl check-update
+discrawl check-update --json
+```
+
+Interactive terminal runs perform a cached daily release check and print a
+stderr notice when a newer OpenClaw release is available. Scripted, JSON, CI,
+and non-TTY runs skip the passive notice. Set `DISCRAWL_NO_UPDATE_CHECK=1` or
+`CRAWLKIT_NO_UPDATE_CHECK=1` to disable it.
 
 ## From source
 

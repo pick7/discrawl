@@ -42,6 +42,7 @@ func (r *runtime) runMetadata(args []string) error {
 	manifest.Privacy = control.Privacy{ContainsPrivateMessages: true, ExportsSecrets: false, LocalOnlyScopes: []string{"discord", "desktop-cache", "sqlite", "git-share"}}
 	manifest.Commands = map[string]control.Command{
 		"status":       {Title: "Status", Argv: []string{"discrawl", "status", "--json"}, JSON: true},
+		"check-update": {Title: "Check for updates", Argv: []string{"discrawl", "check-update", "--json"}, JSON: true},
 		"doctor":       {Title: "Doctor", Argv: []string{"discrawl", "doctor", "--json"}, JSON: true},
 		"sync":         {Title: "Sync", Argv: []string{"discrawl", "--json", "sync"}, JSON: true, Mutates: true},
 		"tap":          {Title: "Import desktop cache", Argv: []string{"discrawl", "--json", "tap"}, JSON: true, Mutates: true},

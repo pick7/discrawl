@@ -88,6 +88,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		plain:      global.Plain,
 		logger:     slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level})),
 	}
+	runtime.maybeNotifyRelease(rest)
 	return runtime.dispatch(rest)
 }
 
@@ -196,6 +197,8 @@ func (r *runtime) dispatch(rest []string) error {
 	switch rest[0] {
 	case "metadata":
 		return r.runMetadata(rest[1:])
+	case "check-update":
+		return r.runCheckUpdate(rest[1:])
 	case "init":
 		return r.runInit(rest[1:])
 	case "sync":

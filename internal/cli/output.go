@@ -102,6 +102,7 @@ Usage:
 
 Commands:
   metadata
+  check-update
   version
   init
   sync
@@ -140,6 +141,11 @@ func printCommandUsage(w io.Writer, args []string) error {
 }
 
 var commandUsage = map[string]string{
+	"check-update": `Usage:
+  discrawl check-update [--json] [--force]
+
+Checks GitHub Releases for a newer discrawl build.
+`,
 	"search": `Usage:
   discrawl search [flags] <query>
 

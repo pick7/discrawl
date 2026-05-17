@@ -4,6 +4,9 @@
 
 ### Changes
 
+- Add cached release checks with `discrawl check-update` and passive terminal
+  notices when a newer OpenClaw release is available.
+
 ### Fixes
 
 ## 0.9.0 - 2026-05-17

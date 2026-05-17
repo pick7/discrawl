@@ -85,9 +85,9 @@ Useful commands:
 curl -L -o /tmp/discrawl-darwin-arm64.tgz https://github.com/openclaw/discrawl/releases/download/vX.Y.Z/discrawl_X.Y.Z_darwin_arm64.tar.gz
 shasum -a 256 /tmp/discrawl-darwin-arm64.tgz
 brew uninstall discrawl || true
-brew install steipete/tap/discrawl
+brew install openclaw/tap/discrawl
 discrawl --version
-brew info steipete/tap/discrawl
+brew info openclaw/tap/discrawl
 ```
 
 ## Notes

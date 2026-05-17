@@ -123,9 +123,20 @@ then copy the database/share/cache/log paths you want to move.
 Homebrew (recommended):
 
 ```bash
-brew install steipete/tap/discrawl  # auto-taps steipete/tap
+brew install openclaw/tap/discrawl
 discrawl --version
 ```
+
+Check for newer releases manually with:
+
+```bash
+discrawl check-update
+```
+
+Interactive terminal runs also perform a cached daily release check and print a
+stderr notice when a newer OpenClaw release is available. Set
+`DISCRAWL_NO_UPDATE_CHECK=1` or `CRAWLKIT_NO_UPDATE_CHECK=1` to disable that
+passive notice.
 
 Build from source:
 
