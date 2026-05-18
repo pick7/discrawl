@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2 - Unreleased
+
+### Changes
+
+### Fixes
+
 ## 0.9.1 - 2026-05-18
 
 ### Changes
