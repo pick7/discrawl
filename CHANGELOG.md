@@ -4,7 +4,7 @@
 
 ### Changes
 
-- Update `crawlkit` to v0.9.0.
+- Update `crawlkit` to v0.7.0.
 
 ### Fixes
 
