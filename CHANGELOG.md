@@ -4,6 +4,7 @@
 
 ### Changes
 
+- Restore the missing v0.10.0 release history for the first Cloudflare remote archive release. Thanks @joshka.
 - Expose the release changelog directly in the documentation site navigation. Thanks @joshka.
 
 ### Fixes
@@ -17,15 +18,6 @@
 - Add optional `turbovec` semantic-search scoring via `[search.embeddings].vector_backend`, while keeping exact cosine as the default backend. Thanks @vincentkoc.
 - Added the Homebrew install command to the `discrawl.sh` landing hero and agent docs index, with a one-row desktop layout and copy button.
 - Update `crawlkit` through v0.12.0.
-- Add read-only Cloudflare remote archive scaffolding with `[remote]` config,
-  `subscribe-cloud`, GitHub-backed `remote login` with OAuth or token-env
-  bootstrap, `remote status`, `remote archives`, and cloud-mode `status --json`
-  output that does not open or create a local SQLite database.
-- Route cloud-mode `search` and filtered `messages` reads to Worker named
-  queries so subscribers can inspect live D1 data without local SQLite.
-- Add `discrawl cloud publish` to export non-DM local SQLite rows into the
-  Cloudflare remote archive ingest API without changing Git snapshot
-  publishing.
 - Mirror the non-DM local SQLite archive into the Worker-backed R2 object store
   during `discrawl cloud publish`, alongside the D1 row ingest used for live
   queries.
@@ -36,6 +28,14 @@
 
 - Kept resumed `sync --full` backfills from moving channel latest-message checkpoints backward, avoiding duplicate head recrawls on large interrupted channels. Thanks @hannesrudolph.
 - Made `messages --sync` fail fast with an omit-`--sync` hint when a live `tail` process owns the sync lock, while plain `messages` reads continue without waiting. Thanks @jeanmonet.
+
+## 0.10.0 - 2026-05-27
+
+### Changes
+
+- Add read-only Cloudflare remote archive mode with `[remote]` config, `subscribe-cloud`, GitHub-backed `remote login`, `remote status`, `remote archives`, and cloud-mode `status --json` without creating a local SQLite database.
+- Route cloud-mode `search` and filtered `messages` reads to Worker named queries so subscribers can inspect live D1 data without local SQLite.
+- Add `discrawl cloud publish` to export non-DM local SQLite rows to the Cloudflare remote archive without changing Git snapshot publishing.
 
 ## 0.9.1 - 2026-05-18
 
