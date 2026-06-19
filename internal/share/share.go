@@ -832,6 +832,12 @@ func ImportAt(ctx context.Context, s *store.Store, opts Options, ref string) (Ma
 	if err != nil {
 		return Manifest{}, err
 	}
+	manifest = enrichManifestFromGit(ctx, opts.RepoPath, commit, manifest)
+	manifestBody, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return Manifest{}, fmt.Errorf("marshal historical manifest: %w", err)
+	}
+	manifestBody = append(manifestBody, '\n')
 	tempDir, err := os.MkdirTemp("", "discrawl-share-ref-*")
 	if err != nil {
 		return Manifest{}, fmt.Errorf("create historical share directory: %w", err)
@@ -883,14 +889,15 @@ func tableSnapshotFiles(table TableManifest) []string {
 
 func materializeRefFile(ctx context.Context, opts mirror.Options, ref, filePath, targetRoot string) error {
 	clean := path.Clean(filepath.ToSlash(strings.TrimSpace(filePath)))
-	if clean == "." || clean == ".." || path.IsAbs(clean) || strings.HasPrefix(clean, "../") || strings.ContainsRune(clean, '\x00') {
+	native := filepath.FromSlash(clean)
+	if clean == "." || clean == ".." || path.IsAbs(clean) || filepath.IsAbs(native) || filepath.VolumeName(native) != "" || strings.HasPrefix(clean, "../") || strings.ContainsRune(clean, '\x00') {
 		return fmt.Errorf("invalid historical share path %q", filePath)
 	}
 	body, _, err := mirror.ReadFileAt(ctx, opts, ref, clean)
 	if err != nil {
 		return err
 	}
-	target := filepath.Join(targetRoot, filepath.FromSlash(clean))
+	target := filepath.Join(targetRoot, native)
 	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 		return fmt.Errorf("create historical share directory: %w", err)
 	}
