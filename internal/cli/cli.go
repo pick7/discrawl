@@ -463,40 +463,26 @@ func (r *runtime) withLocalStoreReadOnly(fn func() error) error {
 		return configErr(err)
 	}
 	r.cfg = cfg
-	var openErr error
-	r.store, openErr = store.OpenReadOnly(r.ctx, dbPath)
-	if openErr != nil {
-		if errors.Is(openErr, os.ErrNotExist) {
-			r.store = nil
-			return fn()
+	return r.openLocalStoreReadOnly(dbPath, fn)
+}
+
+func (r *runtime) withExistingLocalStoreReadOnly(fn func() error) error {
+	cfg, err := config.Load(r.configPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return configErr(err)
 		}
-		if errors.Is(openErr, store.ErrSchemaVersionMismatch) {
-			if err := r.withSyncLock(func() error {
-				storeFactory := r.openStore
-				if storeFactory == nil {
-					storeFactory = store.Open
-				}
-				var migrateErr error
-				r.store, migrateErr = storeFactory(r.ctx, dbPath)
-				if migrateErr != nil {
-					return dbErr(migrateErr)
-				}
-				closeErr := r.store.Close()
-				r.store = nil
-				return closeErr
-			}); err != nil {
-				return err
-			}
-			r.store, openErr = store.OpenReadOnly(r.ctx, dbPath)
-			if openErr == nil {
-				defer func() { _ = r.store.Close() }()
-				return fn()
-			}
+		cfg = config.Default()
+		if err := cfg.Normalize(); err != nil {
+			return configErr(err)
 		}
-		return dbErr(openErr)
 	}
-	defer func() { _ = r.store.Close() }()
-	return fn()
+	dbPath, err := config.ExpandPath(cfg.DBPath)
+	if err != nil {
+		return configErr(err)
+	}
+	r.cfg = cfg
+	return r.openExistingLocalStoreReadOnly(dbPath, fn)
 }
 
 func (r *runtime) openLocalStoreReadOnly(dbPath string, fn func() error) error {
@@ -540,6 +526,23 @@ func (r *runtime) openLocalStoreReadOnly(dbPath string, fn func() error) error {
 		return dbErr(openErr)
 	}
 	defer func() { _ = r.store.Close() }()
+	return fn()
+}
+
+func (r *runtime) openExistingLocalStoreReadOnly(dbPath string, fn func() error) error {
+	r.store = nil
+	s, err := store.OpenReadOnly(r.ctx, dbPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fn()
+		}
+		return dbErr(err)
+	}
+	r.store = s
+	defer func() {
+		_ = r.store.Close()
+		r.store = nil
+	}()
 	return fn()
 }
 

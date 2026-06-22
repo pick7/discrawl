@@ -1075,6 +1075,82 @@ func TestSubscribeCloudDoesNotCreateLocalDB(t *testing.T) {
 	require.NoDirExists(t, filepath.Dir(dbPath))
 }
 
+func TestCloudPublishMissingArchiveDoesNotCreateLocalDB(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	dbPath := filepath.Join(dir, "archive", "discrawl.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+
+	cfg := config.Default()
+	cfg.DBPath = dbPath
+	cfg.Remote.Endpoint = "https://remote.example.test"
+	cfg.Remote.Archive = "openclaw/discord"
+	cfg.Discord.TokenSource = "none"
+	require.NoError(t, config.Write(cfgPath, cfg))
+
+	var stdout, stderr bytes.Buffer
+	err := Run(ctx, []string{"--config", cfgPath, "cloud", "publish"}, &stdout, &stderr)
+
+	require.Error(t, err)
+	require.Equal(t, 5, ExitCode(err))
+	require.Contains(t, err.Error(), "cloud publish requires a local SQLite archive")
+	require.Empty(t, stdout.String())
+	require.NoFileExists(t, dbPath)
+}
+
+func TestOpenExistingLocalStoreReadOnlyMissingArchiveDoesNotOpenWritableStore(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "archive", "discrawl.db")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+
+	calledWritableOpen := false
+	r := &runtime{
+		ctx: ctx,
+		openStore: func(context.Context, string) (*store.Store, error) {
+			calledWritableOpen = true
+			return nil, errors.New("unexpected writable open")
+		},
+	}
+	err := r.openExistingLocalStoreReadOnly(dbPath, func() error {
+		require.Nil(t, r.store)
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.False(t, calledWritableOpen)
+	require.NoFileExists(t, dbPath)
+}
+
+func TestOpenExistingLocalStoreReadOnlySchemaMismatchDoesNotOpenWritableStore(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "discrawl.db")
+	s, err := store.Open(ctx, dbPath)
+	require.NoError(t, err)
+	_, err = s.DB().ExecContext(ctx, "pragma user_version = 0")
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	calledWritableOpen := false
+	r := &runtime{
+		ctx: ctx,
+		openStore: func(context.Context, string) (*store.Store, error) {
+			calledWritableOpen = true
+			return nil, errors.New("unexpected writable open")
+		},
+	}
+	err = r.openExistingLocalStoreReadOnly(dbPath, func() error {
+		t.Fatal("read callback should not run on schema mismatch")
+		return nil
+	})
+
+	require.ErrorIs(t, err, store.ErrSchemaVersionMismatch)
+	require.False(t, calledWritableOpen)
+	_, err = store.OpenReadOnly(ctx, dbPath)
+	require.ErrorIs(t, err, store.ErrSchemaVersionMismatch)
+}
+
 func TestCloudStatusJSONUsesRemoteWithoutLocalDB(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
