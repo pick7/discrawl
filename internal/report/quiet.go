@@ -80,12 +80,19 @@ func quietChannels(ctx context.Context, db *sql.DB, since, now time.Time, guildI
 	query := &strings.Builder{}
 	query.WriteString(`
 with latest_messages as (
-	select
-		m.guild_id,
-		m.channel_id,
-		max(m.created_at) as last_message
-	from messages m
-	group by m.guild_id, m.channel_id
+	select guild_id, channel_id, created_at as last_message
+	from (
+		select
+			m.guild_id,
+			m.channel_id,
+			m.created_at,
+			row_number() over (
+				partition by m.guild_id, m.channel_id
+				order by julianday(m.created_at) desc, m.id desc
+			) as rn
+		from messages m
+	)
+	where rn = 1
 )
 select
 	c.guild_id,
@@ -102,8 +109,8 @@ where ` + quietChannelKindPredicate + `
 		query.WriteString("  and c.guild_id = ?\n")
 		args = append(args, guildID)
 	}
-	query.WriteString("  and (lm.last_message is null or lm.last_message < ?)\n")
-	args = append(args, since.UTC().Format(time.RFC3339Nano))
+	query.WriteString("  and (lm.last_message is null or julianday(lm.last_message) < julianday(?))\n")
+	args = append(args, reportTimeArg(since))
 	query.WriteString("order by channel_name asc\n")
 
 	rows, err := db.QueryContext(ctx, query.String(), args...)

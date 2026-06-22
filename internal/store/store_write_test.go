@@ -69,6 +69,66 @@ func TestUpsertMessagesBatch(t *testing.T) {
 	require.Equal(t, "2", rows[0][0])
 }
 
+func TestUpsertMessagesNormalizesTimestampStrings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	require.NoError(t, s.UpsertMessages(ctx, []MessageMutation{
+		{
+			Record: MessageRecord{
+				ID:                "m1",
+				GuildID:           "g1",
+				ChannelID:         "c1",
+				MessageType:       0,
+				CreatedAt:         "2026-04-25T12:00:00Z",
+				Content:           "exact",
+				NormalizedContent: "exact",
+				RawJSON:           `{"id":"m1"}`,
+			},
+		},
+		{
+			Record: MessageRecord{
+				ID:                "m2",
+				GuildID:           "g1",
+				ChannelID:         "c1",
+				MessageType:       0,
+				CreatedAt:         "2026-04-25T08:00:00.5-04:00",
+				EditedAt:          "2026-04-25T08:00:01.25-04:00",
+				Content:           "half",
+				NormalizedContent: "half",
+				RawJSON:           `{"id":"m2"}`,
+			},
+			Mentions: []MentionEventRecord{{
+				MessageID:  "m2",
+				GuildID:    "g1",
+				ChannelID:  "c1",
+				TargetType: "user",
+				TargetID:   "u1",
+				EventAt:    "2026-04-25T08:00:00.5-04:00",
+			}},
+		},
+	}))
+
+	_, rows, err := s.ReadOnlyQuery(ctx, "select id, created_at from messages order by created_at asc")
+	require.NoError(t, err)
+	require.Equal(t, [][]string{
+		{"m1", "2026-04-25T12:00:00.000000000Z"},
+		{"m2", "2026-04-25T12:00:00.500000000Z"},
+	}, rows)
+
+	_, rows, err = s.ReadOnlyQuery(ctx, "select edited_at from messages where id = 'm2'")
+	require.NoError(t, err)
+	require.Equal(t, "2026-04-25T12:00:01.250000000Z", rows[0][0])
+
+	_, rows, err = s.ReadOnlyQuery(ctx, "select event_at from mention_events where message_id = 'm2'")
+	require.NoError(t, err)
+	require.Equal(t, "2026-04-25T12:00:00.500000000Z", rows[0][0])
+}
+
 func TestUpsertMessagesHonorsCanceledContext(t *testing.T) {
 	t.Parallel()
 

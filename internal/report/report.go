@@ -105,7 +105,7 @@ func scanTotals(ctx context.Context, db *sql.DB, report *ActivityReport) error {
 			(select count(*) from messages),
 			(select count(*) from channels),
 			(select count(*) from members),
-			(select max(created_at) from messages)
+			(select created_at from messages order by julianday(created_at) desc, id desc limit 1)
 	`).Scan(&report.TotalMessages, &report.TotalChannels, &report.TotalMembers, &latest); err != nil {
 		return fmt.Errorf("scan report totals: %w", err)
 	}
@@ -122,8 +122,8 @@ func scanWindow(ctx context.Context, db *sql.DB, label string, since time.Time) 
 			count(distinct nullif(channel_id, '')),
 			coalesce(sum(case when has_attachments then 1 else 0 end), 0)
 		from messages
-		where created_at >= ?
-	`, since.UTC().Format(time.RFC3339Nano)).Scan(&stats.Messages, &stats.ActiveAuthors, &stats.ActiveChannels, &stats.Attachments); err != nil {
+		where julianday(created_at) >= julianday(?)
+	`, reportTimeArg(since)).Scan(&stats.Messages, &stats.ActiveAuthors, &stats.ActiveChannels, &stats.Attachments); err != nil {
 		return WindowStats{}, fmt.Errorf("scan %s stats: %w", label, err)
 	}
 	return stats, nil
@@ -134,11 +134,11 @@ func topChannels(ctx context.Context, db *sql.DB, since time.Time, limit int) ([
 		select coalesce(nullif(c.name, ''), m.channel_id) as name, count(*) as total
 		from messages m
 		left join channels c on c.id = m.channel_id
-		where m.created_at >= ?
+		where julianday(m.created_at) >= julianday(?)
 		group by m.channel_id, coalesce(nullif(c.name, ''), m.channel_id)
 		order by total desc, name asc
 		limit ?
-	`, since.UTC().Format(time.RFC3339Nano), limit)
+	`, reportTimeArg(since), limit)
 }
 
 func topAuthors(ctx context.Context, db *sql.DB, since time.Time, limit int) ([]RankedCount, error) {
@@ -157,22 +157,22 @@ func topAuthors(ctx context.Context, db *sql.DB, since time.Time, limit int) ([]
 			count(*) as total
 		from messages m
 		left join members mem on mem.guild_id = m.guild_id and mem.user_id = m.author_id
-		where m.created_at >= ?
+		where julianday(m.created_at) >= julianday(?)
 		group by m.author_id, name
 		order by total desc, name asc
 		limit ?
-	`, since.UTC().Format(time.RFC3339Nano), limit)
+	`, reportTimeArg(since), limit)
 }
 
 func busiestDays(ctx context.Context, db *sql.DB, since time.Time, limit int) ([]RankedCount, error) {
 	return ranked(ctx, db, `
-		select substr(created_at, 1, 10) as name, count(*) as total
+		select date(created_at) as name, count(*) as total
 		from messages
-		where created_at >= ?
-		group by substr(created_at, 1, 10)
+		where julianday(created_at) >= julianday(?)
+		group by date(created_at)
 		order by total desc, name desc
 		limit ?
-	`, since.UTC().Format(time.RFC3339Nano), limit)
+	`, reportTimeArg(since), limit)
 }
 
 func ranked(ctx context.Context, db *sql.DB, query string, args ...any) ([]RankedCount, error) {
@@ -292,6 +292,10 @@ func parseTime(raw string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func reportTimeArg(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
 }
 
 var reportTemplate = template.Must(template.New("report").Funcs(template.FuncMap{

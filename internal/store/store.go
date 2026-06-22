@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	timeLayout         = time.RFC3339Nano
+	timeLayout         = "2006-01-02T15:04:05.000000000Z07:00"
 	messageFTSVersion  = "2"
 	memberFTSVersion   = "1"
 	storeSchemaVersion = 3

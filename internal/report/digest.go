@@ -123,11 +123,11 @@ select
 from channels c
 left join messages m on m.guild_id = c.guild_id
 	and m.channel_id = c.id
-	and m.created_at >= ?
-	and m.created_at < ?
+	and julianday(m.created_at) >= julianday(?)
+	and julianday(m.created_at) < julianday(?)
 where 1=1
 `)
-	args := []any{since.UTC().Format(time.RFC3339Nano), until.UTC().Format(time.RFC3339Nano)}
+	args := []any{reportTimeArg(since), reportTimeArg(until)}
 	if guildID != "" {
 		query.WriteString("  and c.guild_id = ?\n")
 		args = append(args, guildID)
@@ -173,14 +173,14 @@ select
 	count(*) as total
 from messages m
 left join members mem on mem.guild_id = m.guild_id and mem.user_id = m.author_id
-where m.created_at >= ?
-  and m.created_at < ?
+where julianday(m.created_at) >= julianday(?)
+  and julianday(m.created_at) < julianday(?)
   and m.guild_id = ?
   and m.channel_id = ?
 group by m.author_id, name
 order by total desc, name asc
 limit ?
-`, since.UTC().Format(time.RFC3339Nano), until.UTC().Format(time.RFC3339Nano), guildID, channelID, limit)
+`, reportTimeArg(since), reportTimeArg(until), guildID, channelID, limit)
 }
 
 func topMentionsForDigestChannel(ctx context.Context, db *sql.DB, since, until time.Time, guildID, channelID string, limit int) ([]RankedCount, error) {
@@ -193,14 +193,14 @@ select
 	) as name,
 	count(*) as total
 from mention_events me
-where me.event_at >= ?
-  and me.event_at < ?
+where julianday(me.event_at) >= julianday(?)
+  and julianday(me.event_at) < julianday(?)
   and me.guild_id = ?
   and me.channel_id = ?
 group by me.target_type, me.target_id, name
 order by total desc, name asc
 limit ?
-`, since.UTC().Format(time.RFC3339Nano), until.UTC().Format(time.RFC3339Nano), guildID, channelID, limit)
+`, reportTimeArg(since), reportTimeArg(until), guildID, channelID, limit)
 }
 
 func digestTotals(ctx context.Context, db *sql.DB, since, until time.Time, guildID, channel string) (DigestTotals, error) {
@@ -213,10 +213,10 @@ select
 	count(distinct nullif(m.author_id, '')) as active_authors
 from messages m
 left join channels c on c.id = m.channel_id and c.guild_id = m.guild_id
-where m.created_at >= ?
-  and m.created_at < ?
+where julianday(m.created_at) >= julianday(?)
+  and julianday(m.created_at) < julianday(?)
 `)
-	args := []any{since.UTC().Format(time.RFC3339Nano), until.UTC().Format(time.RFC3339Nano)}
+	args := []any{reportTimeArg(since), reportTimeArg(until)}
 	if guildID != "" {
 		query.WriteString("  and m.guild_id = ?\n")
 		args = append(args, guildID)

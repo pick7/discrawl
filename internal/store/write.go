@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/openclaw/discrawl/internal/store/storedb"
@@ -451,7 +452,7 @@ func replaceMentionEventsTx(ctx context.Context, qtx *storedb.Queries, messageID
 		return nil
 	}
 	for _, mention := range mentions {
-		eventAt := mention.EventAt
+		eventAt := normalizeStoredTime(mention.EventAt)
 		if eventAt == "" {
 			eventAt = time.Now().UTC().Format(timeLayout)
 		}
@@ -644,9 +645,9 @@ func upsertMessageParams(message MessageRecord, now string) storedb.UpsertMessag
 		ChannelID:         message.ChannelID,
 		AuthorID:          nullString(message.AuthorID),
 		MessageType:       int64(message.MessageType),
-		CreatedAt:         message.CreatedAt,
-		EditedAt:          nullString(message.EditedAt),
-		DeletedAt:         nullString(message.DeletedAt),
+		CreatedAt:         normalizeStoredTime(message.CreatedAt),
+		EditedAt:          nullString(normalizeStoredTime(message.EditedAt)),
+		DeletedAt:         nullString(normalizeStoredTime(message.DeletedAt)),
 		Content:           message.Content,
 		NormalizedContent: message.NormalizedContent,
 		ReplyToMessageID:  nullString(message.ReplyToMessageID),
@@ -678,6 +679,19 @@ func insertMessageAttachmentParams(attachment AttachmentRecord, now string) stor
 		FetchError:    attachment.FetchError,
 		UpdatedAt:     now,
 	}
+}
+
+func normalizeStoredTime(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t.UTC().Format(timeLayout)
+		}
+	}
+	return raw
 }
 
 func upsertMemberFTSTx(ctx context.Context, tx *sql.Tx, member MemberRecord) error {

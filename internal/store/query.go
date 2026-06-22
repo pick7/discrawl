@@ -1053,10 +1053,11 @@ func parseTime(value string) time.Time {
 	if value == "" {
 		return time.Time{}
 	}
-	t, err := time.Parse(timeLayout, value)
-	if err == nil {
-		return t
+	for _, layout := range []string{timeLayout, time.RFC3339Nano, time.RFC3339} {
+		t, err := time.Parse(layout, value)
+		if err == nil {
+			return t
+		}
 	}
-	t, _ = time.Parse(time.RFC3339, value)
-	return t
+	return time.Time{}
 }

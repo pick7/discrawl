@@ -192,10 +192,10 @@ select
 	count(*) as messages
 from messages m
 left join channels c on c.id = m.channel_id and c.guild_id = m.guild_id
-where m.created_at >= ?
-  and m.created_at < ?
+where julianday(m.created_at) >= julianday(?)
+  and julianday(m.created_at) < julianday(?)
 `)
-	args := []any{since.UTC().Format(time.RFC3339Nano), until.UTC().Format(time.RFC3339Nano)}
+	args := []any{reportTimeArg(since), reportTimeArg(until)}
 	if guildID != "" {
 		query.WriteString("  and m.guild_id = ?\n")
 		args = append(args, guildID)
