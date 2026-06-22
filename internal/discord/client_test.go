@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -167,6 +168,22 @@ func TestTailRequiresHandler(t *testing.T) {
 	require.NoError(t, err)
 	require.Error(t, client.Tail(context.Background(), nil))
 	require.NoError(t, (&Client{}).Close())
+}
+
+func TestTailRemovesGatewayHandlersWhenOpenFails(t *testing.T) {
+	oldGateway := discordgo.EndpointGateway
+	discordgo.EndpointGateway = "://invalid-gateway"
+	defer func() {
+		discordgo.EndpointGateway = oldGateway
+	}()
+
+	client, err := New("token")
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+	require.Zero(t, discordSessionHandlerCount(client.session))
+
+	require.Error(t, client.Tail(context.Background(), &recordingHandler{}))
+	require.Zero(t, discordSessionHandlerCount(client.session))
 }
 
 func TestRunTailTaskRecoversPanics(t *testing.T) {
@@ -338,6 +355,7 @@ func TestTailReceivesGatewayEvents(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = client.Close() }()
 	client.session.ShouldReconnectOnError = false
+	require.Zero(t, discordSessionHandlerCount(client.session))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -354,6 +372,7 @@ func TestTailReceivesGatewayEvents(t *testing.T) {
 	require.Equal(t, 1, handler.memberUpserts)
 	require.Equal(t, 1, handler.memberDeletes)
 	require.Equal(t, 1, handler.ready)
+	require.Zero(t, discordSessionHandlerCount(client.session))
 }
 
 func TestTailFailsFastWhenWorkerQueueFills(t *testing.T) {
@@ -502,6 +521,15 @@ func patchDiscordEndpoints(apiBase string) func() {
 		discordgo.EndpointChannelMessages = oldChannelMessages
 		discordgo.EndpointChannelMessage = oldChannelMessage
 	}
+}
+
+func discordSessionHandlerCount(session *discordgo.Session) int {
+	handlers := reflect.ValueOf(session).Elem().FieldByName("handlers")
+	total := 0
+	for _, key := range handlers.MapKeys() {
+		total += handlers.MapIndex(key).Len()
+	}
+	return total
 }
 
 type recordingHandler struct {

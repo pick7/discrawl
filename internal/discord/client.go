@@ -187,7 +187,6 @@ func (c *Client) Tail(ctx context.Context, handler EventHandler) error {
 		return errors.New("missing event handler")
 	}
 	tailCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	errCh := make(chan error, 1)
 	workCh := make(chan func(context.Context) error, c.tailQueueSize)
@@ -213,12 +212,16 @@ func (c *Client) Tail(ctx context.Context, handler EventHandler) error {
 		})
 	}
 
-	c.session.AddHandler(func(_ *discordgo.Session, evt *discordgo.MessageCreate) {
+	var removers []func()
+	addHandler := func(eventHandler any) {
+		removers = append(removers, c.session.AddHandler(eventHandler))
+	}
+	addHandler(func(_ *discordgo.Session, evt *discordgo.MessageCreate) {
 		c.enqueueTailTask(tailCtx, workCh, errCh, func(taskCtx context.Context) error {
 			return handler.OnMessageCreate(taskCtx, evt.Message)
 		})
 	})
-	c.session.AddHandler(func(session *discordgo.Session, evt *discordgo.MessageUpdate) {
+	addHandler(func(session *discordgo.Session, evt *discordgo.MessageUpdate) {
 		c.enqueueTailTask(tailCtx, workCh, errCh, func(taskCtx context.Context) error {
 			msg := evt.Message
 			if msg != nil && msg.Content == "" {
@@ -233,27 +236,27 @@ func (c *Client) Tail(ctx context.Context, handler EventHandler) error {
 			return handler.OnMessageUpdate(taskCtx, msg)
 		})
 	})
-	c.session.AddHandler(func(_ *discordgo.Session, evt *discordgo.MessageDelete) {
+	addHandler(func(_ *discordgo.Session, evt *discordgo.MessageDelete) {
 		c.enqueueTailTask(tailCtx, workCh, errCh, func(taskCtx context.Context) error {
 			return handler.OnMessageDelete(taskCtx, evt)
 		})
 	})
-	c.session.AddHandler(func(_ *discordgo.Session, evt *discordgo.ChannelCreate) {
+	addHandler(func(_ *discordgo.Session, evt *discordgo.ChannelCreate) {
 		c.enqueueTailTask(tailCtx, workCh, errCh, func(taskCtx context.Context) error {
 			return handler.OnChannelUpsert(taskCtx, evt.Channel)
 		})
 	})
-	c.session.AddHandler(func(_ *discordgo.Session, evt *discordgo.ChannelUpdate) {
+	addHandler(func(_ *discordgo.Session, evt *discordgo.ChannelUpdate) {
 		c.enqueueTailTask(tailCtx, workCh, errCh, func(taskCtx context.Context) error {
 			return handler.OnChannelUpsert(taskCtx, evt.Channel)
 		})
 	})
-	c.session.AddHandler(func(_ *discordgo.Session, evt *discordgo.GuildMemberAdd) {
+	addHandler(func(_ *discordgo.Session, evt *discordgo.GuildMemberAdd) {
 		c.enqueueTailTask(tailCtx, workCh, errCh, func(taskCtx context.Context) error {
 			return handler.OnMemberUpsert(taskCtx, evt.GuildID, evt.Member)
 		})
 	})
-	c.session.AddHandler(func(_ *discordgo.Session, evt *discordgo.GuildMemberUpdate) {
+	addHandler(func(_ *discordgo.Session, evt *discordgo.GuildMemberUpdate) {
 		member := &discordgo.Member{
 			GuildID:  evt.GuildID,
 			Nick:     evt.Nick,
@@ -266,7 +269,7 @@ func (c *Client) Tail(ctx context.Context, handler EventHandler) error {
 			return handler.OnMemberUpsert(taskCtx, evt.GuildID, member)
 		})
 	})
-	c.session.AddHandler(func(_ *discordgo.Session, evt *discordgo.GuildMemberRemove) {
+	addHandler(func(_ *discordgo.Session, evt *discordgo.GuildMemberRemove) {
 		if evt.User == nil {
 			return
 		}
@@ -274,14 +277,21 @@ func (c *Client) Tail(ctx context.Context, handler EventHandler) error {
 			return handler.OnMemberDelete(taskCtx, evt.GuildID, evt.User.ID)
 		})
 	})
+	opened := false
+	defer func() {
+		cancel()
+		for i := len(removers) - 1; i >= 0; i-- {
+			removers[i]()
+		}
+		if opened {
+			_ = c.session.Close()
+		}
+		wg.Wait()
+	}()
 	if err := c.session.Open(); err != nil {
 		return err
 	}
-	defer func() {
-		cancel()
-		_ = c.session.Close()
-		wg.Wait()
-	}()
+	opened = true
 	if ready, ok := handler.(TailReadyHandler); ok {
 		if err := ready.OnTailReady(tailCtx); err != nil {
 			return err
