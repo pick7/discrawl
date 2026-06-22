@@ -1023,12 +1023,16 @@ func TestReadCommandsCanDisableAutoImportWithEnv(t *testing.T) {
 	cfg.Share.AutoUpdate = true
 	require.NoError(t, config.Write(cfgPath, cfg))
 
+	reader, err := store.Open(ctx, cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+
 	t.Setenv("DISCRAWL_NO_AUTO_UPDATE", "1")
 	var out bytes.Buffer
 	require.NoError(t, Run(ctx, []string{"--config", cfgPath, "search", "automatic"}, &out, &bytes.Buffer{}))
 	require.NotContains(t, out.String(), "automatic updates work")
 
-	reader, err := store.Open(ctx, cfg.DBPath)
+	reader, err = store.Open(ctx, cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 	lastImport, err := reader.GetSyncState(ctx, share.LastImportSyncScope)
@@ -2531,7 +2535,7 @@ func TestSyncLockHelperEdges(t *testing.T) {
 	require.NoError(t, rt.activateTailSyncLock())
 }
 
-func TestReadCommandsMigrateOlderLocalStore(t *testing.T) {
+func TestReadCommandsRejectMissingLocalStoreWithoutCreatingArchive(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -2539,24 +2543,15 @@ func TestReadCommandsMigrateOlderLocalStore(t *testing.T) {
 	cfgPath := filepath.Join(dir, "config.toml")
 	require.NoError(t, config.Write(cfgPath, cfg))
 
-	s := seedCLIStore(t, cfg.DBPath)
-	_, err := s.DB().ExecContext(ctx, `pragma user_version = 1`)
-	require.NoError(t, err)
-	require.NoError(t, s.Close())
-
 	var out bytes.Buffer
-	require.NoError(t, Run(ctx, []string{"--config", cfgPath, "search", "automatic"}, &out, &bytes.Buffer{}))
-	require.Contains(t, out.String(), "automatic updates work")
-
-	reader, err := store.OpenReadOnly(ctx, cfg.DBPath)
-	require.NoError(t, err)
-	defer func() { _ = reader.Close() }()
-	var version int
-	require.NoError(t, reader.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version))
-	require.Equal(t, 3, version)
+	err := Run(ctx, []string{"--config", cfgPath, "search", "automatic"}, &out, &bytes.Buffer{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "command requires a local SQLite archive")
+	require.Empty(t, out.String())
+	require.NoFileExists(t, cfg.DBPath)
 }
 
-func TestReadOnlyCommandsMigrateOlderLocalStore(t *testing.T) {
+func TestReadCommandsRejectOlderLocalStoreWithoutMigrating(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -2570,15 +2565,42 @@ func TestReadOnlyCommandsMigrateOlderLocalStore(t *testing.T) {
 	require.NoError(t, s.Close())
 
 	var out bytes.Buffer
-	require.NoError(t, Run(ctx, []string{"--config", cfgPath, "status"}, &out, &bytes.Buffer{}))
-	require.Contains(t, out.String(), "messages=1")
+	err = Run(ctx, []string{"--config", cfgPath, "search", "automatic"}, &out, &bytes.Buffer{})
+	require.ErrorIs(t, err, store.ErrSchemaVersionMismatch)
+	require.Empty(t, out.String())
 
-	reader, err := store.OpenReadOnly(ctx, cfg.DBPath)
+	reader, err := sql.Open("sqlite", cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { _ = reader.Close() }()
 	var version int
-	require.NoError(t, reader.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version))
-	require.Equal(t, 3, version)
+	require.NoError(t, reader.QueryRowContext(ctx, `pragma user_version`).Scan(&version))
+	require.Equal(t, 1, version)
+}
+
+func TestReadOnlyCommandsRejectOlderLocalStoreWithoutMigrating(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DBPath = filepath.Join(dir, "discrawl.db")
+	cfgPath := filepath.Join(dir, "config.toml")
+	require.NoError(t, config.Write(cfgPath, cfg))
+
+	s := seedCLIStore(t, cfg.DBPath)
+	_, err := s.DB().ExecContext(ctx, `pragma user_version = 1`)
+	require.NoError(t, err)
+	require.NoError(t, s.Close())
+
+	var out bytes.Buffer
+	err = Run(ctx, []string{"--config", cfgPath, "status"}, &out, &bytes.Buffer{})
+	require.ErrorIs(t, err, store.ErrSchemaVersionMismatch)
+	require.Empty(t, out.String())
+
+	reader, err := sql.Open("sqlite", cfg.DBPath)
+	require.NoError(t, err)
+	defer func() { _ = reader.Close() }()
+	var version int
+	require.NoError(t, reader.QueryRowContext(ctx, `pragma user_version`).Scan(&version))
+	require.Equal(t, 1, version)
 }
 
 func seedCLIStore(t *testing.T, path string) *store.Store {

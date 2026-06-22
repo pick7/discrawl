@@ -366,7 +366,12 @@ func (r *runtime) withLocalStoreReadUpdate(updateMode shareUpdateMode, fn func()
 			return err
 		}
 	}
-	return r.openLocalStoreReadOnly(dbPath, fn)
+	return r.openLocalStoreReadOnly(dbPath, func() error {
+		if r.store == nil {
+			return dbErr(errors.New("command requires a local SQLite archive"))
+		}
+		return fn()
+	})
 }
 
 func (r *runtime) withLocalStoreUpdateLocked(updateMode shareUpdateMode, lockDB bool, fn func() error) error {
@@ -486,46 +491,19 @@ func (r *runtime) withExistingLocalStoreReadOnly(fn func() error) error {
 }
 
 func (r *runtime) openLocalStoreReadOnly(dbPath string, fn func() error) error {
-	var openErr error
-	r.store, openErr = store.OpenReadOnly(r.ctx, dbPath)
-	if openErr != nil {
-		if errors.Is(openErr, os.ErrNotExist) {
-			storeFactory := r.openStore
-			if storeFactory == nil {
-				storeFactory = store.Open
-			}
-			r.store, openErr = storeFactory(r.ctx, dbPath)
-			if openErr == nil {
-				defer func() { _ = r.store.Close() }()
-				return fn()
-			}
+	r.store = nil
+	s, err := store.OpenReadOnly(r.ctx, dbPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fn()
 		}
-		if errors.Is(openErr, store.ErrSchemaVersionMismatch) {
-			if err := r.withSyncLock(func() error {
-				storeFactory := r.openStore
-				if storeFactory == nil {
-					storeFactory = store.Open
-				}
-				var migrateErr error
-				r.store, migrateErr = storeFactory(r.ctx, dbPath)
-				if migrateErr != nil {
-					return dbErr(migrateErr)
-				}
-				closeErr := r.store.Close()
-				r.store = nil
-				return closeErr
-			}); err != nil {
-				return err
-			}
-			r.store, openErr = store.OpenReadOnly(r.ctx, dbPath)
-			if openErr == nil {
-				defer func() { _ = r.store.Close() }()
-				return fn()
-			}
-		}
-		return dbErr(openErr)
+		return dbErr(err)
 	}
-	defer func() { _ = r.store.Close() }()
+	r.store = s
+	defer func() {
+		_ = r.store.Close()
+		r.store = nil
+	}()
 	return fn()
 }
 
