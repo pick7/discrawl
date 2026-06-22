@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,12 @@ import (
 	"github.com/openclaw/discrawl/internal/syncer"
 	"github.com/zalando/go-keyring"
 )
+
+type cliRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f cliRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestHelpAndVersion(t *testing.T) {
 	t.Parallel()
@@ -813,19 +820,30 @@ func TestAttachmentsCommandListsAndFetchesMedia(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	body := []byte("png-ish")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/file.png" {
-			http.NotFound(w, r)
-			return
+	attachmentURL := "https://cdn.discordapp.com/attachments/c1/file.png"
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = cliRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != attachmentURL {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("not found")),
+				Request:    req,
+			}, nil
 		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write(body)
-	}))
-	defer server.Close()
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Header:        make(http.Header),
+			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Request:       req,
+		}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 
 	dbPath := filepath.Join(dir, "discrawl.db")
 	s := seedCLIStore(t, dbPath)
-	require.NoError(t, addCLIAttachment(ctx, s, server.URL+"/file.png"))
+	require.NoError(t, addCLIAttachment(ctx, s, attachmentURL))
 	require.NoError(t, s.Close())
 
 	cfgPath := filepath.Join(dir, "config.toml")

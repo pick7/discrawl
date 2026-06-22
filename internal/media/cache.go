@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,8 +144,11 @@ type fetchResult struct {
 }
 
 func fetchOne(ctx context.Context, opts FetchOptions, attachment store.AttachmentRow) (fetchResult, error) {
-	urls := candidateURLs(attachment)
+	urls, invalidURL := candidateURLs(attachment)
 	if len(urls) == 0 {
+		if invalidURL {
+			return fetchResult{status: "skipped", reason: "invalid_url"}, nil
+		}
 		return fetchResult{status: "skipped", reason: "no_url"}, nil
 	}
 	var lastErr error
@@ -158,9 +162,10 @@ func fetchOne(ctx context.Context, opts FetchOptions, attachment store.Attachmen
 	return fetchResult{}, lastErr
 }
 
-func candidateURLs(attachment store.AttachmentRow) []string {
+func candidateURLs(attachment store.AttachmentRow) ([]string, bool) {
 	seen := map[string]struct{}{}
 	out := []string{}
+	invalidURL := false
 	for _, raw := range []string{attachment.URL, attachment.ProxyURL} {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
@@ -170,12 +175,19 @@ func candidateURLs(attachment store.AttachmentRow) []string {
 			continue
 		}
 		seen[raw] = struct{}{}
+		if !isAllowedAttachmentURL(raw) {
+			invalidURL = true
+			continue
+		}
 		out = append(out, raw)
 	}
-	return out
+	return out, invalidURL
 }
 
 func fetchURL(ctx context.Context, opts FetchOptions, attachment store.AttachmentRow, url string) (fetchResult, error) {
+	if !isAllowedAttachmentURL(url) {
+		return fetchResult{status: "skipped", reason: "invalid_url"}, nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fetchResult{}, err
@@ -236,6 +248,38 @@ func fetchURL(ctx context.Context, opts FetchOptions, attachment store.Attachmen
 		}
 	}
 	return fetchResult{mediaPath: mediaPath, sha256: hash, size: int64(len(body))}, nil
+}
+
+func isAllowedAttachmentURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	if port := parsed.Port(); port != "" && port != "443" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case host == "cdn.discordapp.com", host == "media.discordapp.net":
+		return true
+	case strings.HasPrefix(host, "images-ext-") && strings.HasSuffix(host, ".discordapp.net"):
+		shard := strings.TrimSuffix(strings.TrimPrefix(host, "images-ext-"), ".discordapp.net")
+		return allDigits(shard)
+	default:
+		return false
+	}
+}
+
+func allDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func mediaTargetNeedsWrite(target, hash string) (bool, error) {

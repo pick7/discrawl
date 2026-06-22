@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,25 +23,17 @@ func TestFetchCachesAttachmentMedia(t *testing.T) {
 
 	ctx := context.Background()
 	body := []byte("image-bytes")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/file.png" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "image/png")
-		_, _ = w.Write(body)
-	}))
-	defer server.Close()
 
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
-	require.NoError(t, seedAttachment(ctx, s, server.URL+"/file.png"))
+	require.NoError(t, seedAttachment(ctx, s, "https://cdn.discordapp.com/attachments/c1/file.png"))
 
 	cacheDir := t.TempDir()
 	stats, err := Fetch(ctx, s, FetchOptions{
 		CacheDir:     cacheDir,
 		MaxBytes:     1024,
+		HTTPClient:   staticHTTPClient(body),
 		StatusUpdate: true,
 		Now:          func() time.Time { return time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC) },
 	})
@@ -73,8 +64,8 @@ func TestFetchLimitAppliesAfterExistingCacheCheck(t *testing.T) {
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
-	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m1", "a1", "https://example.test/one.png"))
-	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m2", "a2", "https://example.test/two.png"))
+	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m1", "a1", "https://cdn.discordapp.com/attachments/c1/one.png"))
+	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m2", "a2", "https://cdn.discordapp.com/attachments/c1/two.png"))
 
 	cacheDir := t.TempDir()
 	_, err = Fetch(ctx, s, FetchOptions{
@@ -105,7 +96,7 @@ func TestFetchForceRewritesCachedMedia(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 	body := []byte("canonical")
-	require.NoError(t, seedAttachment(ctx, s, "https://example.test/file.png"))
+	require.NoError(t, seedAttachment(ctx, s, "https://cdn.discordapp.com/attachments/c1/file.png"))
 
 	cacheDir := t.TempDir()
 	_, err = Fetch(ctx, s, FetchOptions{
@@ -141,8 +132,8 @@ func TestFetchForceMissingSkipsReusableCachedMedia(t *testing.T) {
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
-	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m1", "a1", "https://example.test/one.png"))
-	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m2", "a2", "https://example.test/two.png"))
+	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m1", "a1", "https://cdn.discordapp.com/attachments/c1/one.png"))
+	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m2", "a2", "https://cdn.discordapp.com/attachments/c1/two.png"))
 
 	cacheDir := t.TempDir()
 	_, err = Fetch(ctx, s, FetchOptions{
@@ -183,7 +174,7 @@ func TestFetchRepairsCorruptCachedMedia(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 	body := []byte("canonical")
-	require.NoError(t, seedAttachment(ctx, s, "https://example.test/file.png"))
+	require.NoError(t, seedAttachment(ctx, s, "https://cdn.discordapp.com/attachments/c1/file.png"))
 
 	cacheDir := t.TempDir()
 	_, err = Fetch(ctx, s, FetchOptions{
@@ -219,7 +210,7 @@ func TestFetchCapsLongCacheFilename(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 	longName := strings.Repeat("a", 320) + ".png"
-	require.NoError(t, seedAttachmentRecord(ctx, s, "m1", "a1", longName, "https://example.test/file.png"))
+	require.NoError(t, seedAttachmentRecord(ctx, s, "m1", "a1", longName, "https://cdn.discordapp.com/attachments/c1/file.png"))
 
 	cacheDir := t.TempDir()
 	_, err = Fetch(ctx, s, FetchOptions{
@@ -246,7 +237,7 @@ func TestFetchRecordsSkippedAndFailedStatuses(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
 	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m1", "a1", ""))
-	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m2", "a2", "https://example.test/fail.png"))
+	require.NoError(t, seedAttachmentWithIDs(ctx, s, "m2", "a2", "https://cdn.discordapp.com/attachments/c1/fail.png"))
 
 	stats, err := Fetch(ctx, s, FetchOptions{
 		CacheDir:     t.TempDir(),
@@ -270,6 +261,34 @@ func TestFetchRecordsSkippedAndFailedStatuses(t *testing.T) {
 	require.Len(t, rows[0].FetchError, 512)
 }
 
+func TestFetchRejectsNonDiscordAttachmentURL(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+	require.NoError(t, seedAttachment(ctx, s, "https://127.0.0.1/private.png"))
+
+	called := false
+	stats, err := Fetch(ctx, s, FetchOptions{
+		CacheDir:     t.TempDir(),
+		MaxBytes:     1024,
+		StatusUpdate: true,
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			called = true
+			return nil, errors.New("unexpected request")
+		})},
+	})
+	require.NoError(t, err)
+	require.False(t, called)
+	require.Equal(t, FetchStats{Attachments: 1, Skipped: 1}, stats)
+	rows, err := s.ListAttachments(ctx, store.AttachmentListOptions{MessageID: "m1"})
+	require.NoError(t, err)
+	require.Equal(t, "invalid_url", rows[0].FetchStatus)
+	require.Empty(t, rows[0].FetchError)
+}
+
 func TestFetchSkipsOversizedResponses(t *testing.T) {
 	t.Parallel()
 
@@ -277,7 +296,7 @@ func TestFetchSkipsOversizedResponses(t *testing.T) {
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
-	require.NoError(t, seedAttachment(ctx, s, "https://example.test/large.bin"))
+	require.NoError(t, seedAttachment(ctx, s, "https://cdn.discordapp.com/attachments/c1/large.bin"))
 
 	stats, err := Fetch(ctx, s, FetchOptions{
 		CacheDir:     t.TempDir(),
@@ -309,7 +328,7 @@ func TestFetchUsesProxyFallbackAndBodyLimit(t *testing.T) {
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
 	require.NoError(t, err)
 	defer func() { _ = s.Close() }()
-	require.NoError(t, seedAttachmentRecord(ctx, s, "m1", "a1", "file.bin", "https://example.test/primary"))
+	require.NoError(t, seedAttachmentRecord(ctx, s, "m1", "a1", "file.bin", "https://cdn.discordapp.com/attachments/c1/primary"))
 	require.NoError(t, s.UpsertMessages(ctx, []store.MessageMutation{{
 		Record: store.MessageRecord{
 			ID:                "m1",
@@ -334,8 +353,8 @@ func TestFetchUsesProxyFallbackAndBodyLimit(t *testing.T) {
 			Filename:     "file.bin",
 			ContentType:  "application/octet-stream",
 			Size:         8,
-			URL:          "https://example.test/primary",
-			ProxyURL:     "https://example.test/proxy",
+			URL:          "https://cdn.discordapp.com/attachments/c1/primary",
+			ProxyURL:     "https://media.discordapp.net/attachments/c1/proxy",
 		}},
 	}}))
 
@@ -345,7 +364,7 @@ func TestFetchUsesProxyFallbackAndBodyLimit(t *testing.T) {
 		MaxBytes: 4,
 		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls = append(calls, req.URL.Path)
-			if req.URL.Path == "/primary" {
+			if req.URL.Path == "/attachments/c1/primary" {
 				return &http.Response{
 					StatusCode: http.StatusInternalServerError,
 					Header:     make(http.Header),
@@ -362,7 +381,7 @@ func TestFetchUsesProxyFallbackAndBodyLimit(t *testing.T) {
 		})},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"/primary", "/proxy"}, calls)
+	require.Equal(t, []string{"/attachments/c1/primary", "/attachments/c1/proxy"}, calls)
 	require.Equal(t, 1, stats.Skipped)
 }
 
@@ -386,6 +405,15 @@ func TestMediaPathHelpers(t *testing.T) {
 	require.Error(t, err)
 	_, err = LocalPath(repo, "")
 	require.Error(t, err)
+
+	require.True(t, isAllowedAttachmentURL("https://cdn.discordapp.com/attachments/c/file.png"))
+	require.True(t, isAllowedAttachmentURL("https://media.discordapp.net/attachments/c/file.png"))
+	require.True(t, isAllowedAttachmentURL("https://images-ext-1.discordapp.net/external/file.png"))
+	require.False(t, isAllowedAttachmentURL("http://cdn.discordapp.com/attachments/c/file.png"))
+	require.False(t, isAllowedAttachmentURL("https://127.0.0.1/attachments/c/file.png"))
+	require.False(t, isAllowedAttachmentURL("https://cdn.discordapp.com:444/attachments/c/file.png"))
+	require.False(t, isAllowedAttachmentURL("https://cdn.discordapp.com.evil.test/attachments/c/file.png"))
+	require.False(t, isAllowedAttachmentURL("https://user@cdn.discordapp.com/attachments/c/file.png"))
 }
 
 func TestMediaTargetNeedsWrite(t *testing.T) {
