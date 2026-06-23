@@ -69,6 +69,69 @@ func TestUpsertMessagesBatch(t *testing.T) {
 	require.Equal(t, "2", rows[0][0])
 }
 
+func TestUpsertMessagesRefreshesDuplicateAttachmentID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "discrawl.db"))
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	first := MessageMutation{
+		Record: MessageRecord{
+			ID:                "m1",
+			GuildID:           "g1",
+			ChannelID:         "c1",
+			MessageType:       0,
+			CreatedAt:         now,
+			Content:           "first",
+			NormalizedContent: "first",
+			HasAttachments:    true,
+			RawJSON:           `{"id":"m1"}`,
+		},
+		Attachments: []AttachmentRecord{{
+			AttachmentID: "a1",
+			MessageID:    "m1",
+			GuildID:      "g1",
+			ChannelID:    "c1",
+			Filename:     "first.txt",
+			TextContent:  "cached text",
+			MediaPath:    "attachments/a1.txt",
+			FetchStatus:  "done",
+		}},
+	}
+	second := MessageMutation{
+		Record: MessageRecord{
+			ID:                "m2",
+			GuildID:           "g1",
+			ChannelID:         "c2",
+			MessageType:       0,
+			CreatedAt:         now,
+			Content:           "second",
+			NormalizedContent: "second",
+			HasAttachments:    true,
+			RawJSON:           `{"id":"m2"}`,
+		},
+		Attachments: []AttachmentRecord{{
+			AttachmentID: "a1",
+			MessageID:    "m2",
+			GuildID:      "g1",
+			ChannelID:    "c2",
+			Filename:     "second.txt",
+			TextContent:  "fresh text",
+			FetchStatus:  "done",
+		}},
+	}
+
+	require.NoError(t, s.UpsertMessages(ctx, []MessageMutation{first}))
+	require.NoError(t, s.UpsertMessages(ctx, []MessageMutation{second}))
+
+	_, rows, err := s.ReadOnlyQuery(ctx, "select attachment_id, message_id, channel_id, filename, text_content, media_path from message_attachments")
+	require.NoError(t, err)
+	require.Equal(t, [][]string{{"a1", "m2", "c2", "second.txt", "fresh text", ""}}, rows)
+}
+
 func TestUpsertMessagesNormalizesTimestampStrings(t *testing.T) {
 	t.Parallel()
 

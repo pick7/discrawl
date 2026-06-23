@@ -384,7 +384,25 @@ insert into message_attachments(
 	attachment_id, message_id, guild_id, channel_id, author_id, filename,
 	content_type, size, url, proxy_url, text_content, media_path, content_sha256,
 	content_size, fetched_at, fetch_status, fetch_error, updated_at
-) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(attachment_id) do update set
+	message_id = excluded.message_id,
+	guild_id = excluded.guild_id,
+	channel_id = excluded.channel_id,
+	author_id = excluded.author_id,
+	filename = excluded.filename,
+	content_type = excluded.content_type,
+	size = excluded.size,
+	url = excluded.url,
+	proxy_url = excluded.proxy_url,
+	text_content = excluded.text_content,
+	media_path = excluded.media_path,
+	content_sha256 = excluded.content_sha256,
+	content_size = excluded.content_size,
+	fetched_at = excluded.fetched_at,
+	fetch_status = excluded.fetch_status,
+	fetch_error = excluded.fetch_error,
+	updated_at = excluded.updated_at;
 
 -- name: DeleteMentionEventsByMessage :exec
 delete from mention_events
