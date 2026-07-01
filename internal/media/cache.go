@@ -77,6 +77,9 @@ func Fetch(ctx context.Context, s *store.Store, opts FetchOptions) (FetchStats, 
 		}
 		if attachment.MediaPath != "" && (missingOnly || !opts.Force) {
 			if mediaFileReusable(opts.CacheDir, attachment) {
+				if err := resolveAttachmentFailure(ctx, s, attachment); err != nil {
+					return stats, err
+				}
 				stats.Reused++
 				continue
 			}
@@ -89,8 +92,12 @@ func Fetch(ctx context.Context, s *store.Store, opts FetchOptions) (FetchStats, 
 		switch {
 		case err != nil:
 			stats.Failed++
+			if recordErr := s.RecordFailure(ctx, attachmentFailureRef(attachment), err); recordErr != nil {
+				return stats, recordErr
+			}
 			if opts.StatusUpdate {
 				if err := s.UpdateAttachmentFetchStatus(ctx, attachment.AttachmentID, opts.Now().UTC().Format(time.RFC3339Nano), "failed", clampError(err.Error())); err != nil {
+					_ = s.RecordFailure(ctx, attachmentFailureRef(attachment), err)
 					return stats, err
 				}
 			}
@@ -100,6 +107,9 @@ func Fetch(ctx context.Context, s *store.Store, opts FetchOptions) (FetchStats, 
 				if err := s.UpdateAttachmentFetchStatus(ctx, attachment.AttachmentID, opts.Now().UTC().Format(time.RFC3339Nano), result.reason, ""); err != nil {
 					return stats, err
 				}
+			}
+			if err := resolveAttachmentFailure(ctx, s, attachment); err != nil {
+				return stats, err
 			}
 		default:
 			stats.Fetched++
@@ -112,11 +122,31 @@ func Fetch(ctx context.Context, s *store.Store, opts FetchOptions) (FetchStats, 
 				FetchedAt:     opts.Now().UTC().Format(time.RFC3339Nano),
 				FetchStatus:   "fetched",
 			}); err != nil {
+				_ = s.RecordFailure(ctx, attachmentFailureRef(attachment), err)
+				return stats, err
+			}
+			if err := resolveAttachmentFailure(ctx, s, attachment); err != nil {
 				return stats, err
 			}
 		}
 	}
 	return stats, nil
+}
+
+func attachmentFailureRef(attachment store.AttachmentRow) store.FailureRef {
+	return store.FailureRef{
+		Operation:   "fetch_attachment",
+		Source:      "media",
+		GuildID:     attachment.GuildID,
+		ChannelID:   attachment.ChannelID,
+		MessageID:   attachment.MessageID,
+		RelatedKind: "attachment_id",
+		RelatedID:   attachment.AttachmentID,
+	}
+}
+
+func resolveAttachmentFailure(ctx context.Context, s *store.Store, attachment store.AttachmentRow) error {
+	return s.ResolveFailures(ctx, attachmentFailureRef(attachment))
 }
 
 func mediaFileReusable(cacheDir string, attachment store.AttachmentRow) bool {
@@ -190,15 +220,22 @@ func fetchURL(ctx context.Context, opts FetchOptions, attachment store.Attachmen
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fetchResult{}, err
+		return fetchResult{}, errors.New("build attachment fetch request")
 	}
 	resp, err := opts.HTTPClient.Do(req)
 	if err != nil {
-		return fetchResult{}, err
+		switch {
+		case errors.Is(err, context.Canceled):
+			return fetchResult{}, context.Canceled
+		case errors.Is(err, context.DeadlineExceeded):
+			return fetchResult{}, context.DeadlineExceeded
+		default:
+			return fetchResult{}, errors.New("attachment fetch request failed")
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fetchResult{}, fmt.Errorf("GET %s returned HTTP %d", url, resp.StatusCode)
+		return fetchResult{}, fmt.Errorf("attachment fetch returned HTTP %d", resp.StatusCode)
 	}
 	if resp.ContentLength > opts.MaxBytes {
 		return fetchResult{status: "skipped", reason: "too_large"}, nil
