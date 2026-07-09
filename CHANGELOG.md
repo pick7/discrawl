@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.11.5 - Unreleased
+## 0.11.5 - 2026-07-09
+
+### Maintenance
+
+- Add Developer ID signing and release verification for official macOS binaries under OpenClaw Foundation Team ID `FWJYW4S8P8`, while keeping local and cross-platform snapshot builds credential-free.
+- Update CrawlKit to v0.13.4 and Go to 1.26.5, including the standard-library `crypto/tls` security fixes.
 
 ## 0.11.4 - 2026-07-02
 

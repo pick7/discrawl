@@ -11,6 +11,7 @@ Assumptions:
 - Binary: `discrawl`
 - GoReleaser config: `.goreleaser.yaml`
 - Homebrew tap repo: `~/Projects/homebrew-tap`
+- Official releases run from macOS through the shared managed-keychain helper
 
 ## 0) Prereqs
 
@@ -18,6 +19,7 @@ Assumptions:
 - Go toolchain from `go.mod`
 - GitHub CLI authenticated
 - CI green on `main`
+- OpenClaw Foundation Developer ID Application identity available through the managed release keychain
 
 ## 1) Verify build + tests
 
@@ -48,13 +50,34 @@ Example:
 git checkout main
 git pull --ff-only origin main
 git commit -am "chore(release): vX.Y.Z"
-git tag -a vX.Y.Z -m "Release X.Y.Z"
-git push origin main --tags
+git tag -s vX.Y.Z -m "Release X.Y.Z"
+git tag -v vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
 ```
 
-## 4) Verify GitHub Release
+## 4) Publish signed release artifacts
 
-The tag push triggers `.github/workflows/release.yml`.
+From the clean checkout whose `HEAD` exactly matches the signed tag, publish all
+GoReleaser artifacts through the shared secret-safe keychain helper:
+
+```sh
+./scripts/release-signed.sh vX.Y.Z
+```
+
+The script uses an existing GitHub token environment variable or the
+authenticated GitHub CLI without writing credentials to disk.
+
+The GoReleaser hook signs only the two macOS binaries. Snapshot builds and all
+non-macOS targets remain credential-free. Production builds fail closed unless
+the macOS artifacts use identifier `org.openclaw.discrawl` and OpenClaw
+Foundation Team ID `FWJYW4S8P8`.
+
+Publishing the GitHub Release triggers `.github/workflows/release.yml`, which
+downloads both macOS archives on native runners, verifies their checksums and
+Developer ID signatures, then dispatches the Homebrew update.
+
+## 5) Verify GitHub Release
 
 ```sh
 gh run list -L 5 --workflow release.yml
@@ -78,7 +101,7 @@ Confirm checksums plus assets exist for:
 - `windows_amd64`
 - `windows_arm64`
 
-## 5) Verify Homebrew tap update
+## 6) Verify Homebrew tap update
 
 `discrawl` ships a binary formula in `~/Projects/homebrew-tap/Formula/discrawl.rb` that points at the GitHub release archives.
 
@@ -98,7 +121,7 @@ discrawl --version
 brew info openclaw/tap/discrawl
 ```
 
-## 6) Close out the release
+## 7) Close out the release
 
 Only after the GitHub Release, release notes, assets, and Homebrew formula are
 verified, add the next patch section at the top of `CHANGELOG.md`. For example,

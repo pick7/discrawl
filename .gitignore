@@ -38,6 +38,7 @@ go.work.sum
 .env
 .env.*
 .direnv/
+.mac-release.env
 
 # Build outputs
 /discrawl

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." rev-parse --show-toplevel)"
-image="${DISCRAWL_DOCKER_IMAGE:-golang:1.26.2-bookworm}"
+image="${DISCRAWL_DOCKER_IMAGE:-golang:1.26.5-bookworm}"
 tmp="$(mktemp -d /tmp/discrawl-docker-smoke.XXXXXX)"
 cleanup() {
   rm -rf "$tmp"
@@ -76,7 +76,7 @@ docker run --rm \
     grep -Eq "(^|[^0-9])1([^0-9]|$)" /work/embeddings.out
     "$discrawl" --config /work/config.toml search "docker smoke archive" | tee /work/search.out
     grep -q "docker smoke archive is queryable" /work/search.out
-    "$discrawl" --config /work/config.toml messages --channel general --days 30 --all | tee /work/messages.out
+    "$discrawl" --config /work/config.toml messages --channel general --all | tee /work/messages.out
     grep -q "docker smoke archive is queryable" /work/messages.out
     "$discrawl" --config /work/config.toml --plain sql "select count(*) as total from messages" | tee /work/sql.out
     grep -Eq "(^|[^0-9])1([^0-9]|$)" /work/sql.out
