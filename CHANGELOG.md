@@ -1,10 +1,16 @@
 # Changelog
 
-## 0.11.7 - Unreleased
+## 0.11.7 - 2026-07-17
+
+### Highlights
+
+- Ship official macOS binaries notarized by Apple, with hardened runtime, trusted timestamps, stable Foundation identity requirements, and online ticket verification.
+- Keep incomplete macOS artifacts out of releases by preserving GoReleaser outputs until signing, notarization, and every post-notarization check succeeds.
 
 ### Maintenance
 
-- Notarize every signed macOS release binary and require Apple's online ticket verification before publication.
+- Require the private runtime notary profile for official releases and verify notarization tickets again from published macOS archives.
+- Update Crawlkit to v0.14.3 and its compatible SQLite and terminal-detection stack.
 
 ## 0.11.6 - 2026-07-17
 
